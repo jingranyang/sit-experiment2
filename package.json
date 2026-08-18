@@ -1,0 +1,15 @@
+{
+  "name": "sit-experiment",
+  "version": "1.0.0",
+  "description": "Real-time group-identity behavioral experiment platform (minimal group cooperative task + allocation + survey). Zero external runtime dependencies.",
+  "main": "server.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/simulate.js"
+  },
+  "license": "MIT"
+}
