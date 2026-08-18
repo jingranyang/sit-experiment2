@@ -1,4 +1,4 @@
 node_modules/
-data/*.db
-data/*.db-*
+server-version/data/*.db
+server-version/data/*.db-*
 *.log
