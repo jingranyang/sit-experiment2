@@ -3,12 +3,12 @@
 
   // =========================================================================
   // This page is designed to run standalone on GitHub Pages and be embedded
-  // (via <iframe>) or linked to from a Qualtrics survey. It handles TWO
+  // (via <iframe>) or linked to from a Qualtrics survey. It handles THREE
   // sequential cooperative mini-tasks with computer-simulated teammates and
   // opponents: (1) a math task, (2) a "spot the difference" task (找不同/
-  // 大家来找茬). Consent, instructions, allocation tasks, surveys, and
-  // debrief are expected to live in Qualtrics itself. See
-  // QUALTRICS_INTEGRATION.md for wiring.
+  // 大家来找茬), (3) a tile-pair-matching task (连连看). Consent,
+  // instructions, allocation tasks, surveys, and debrief are expected to
+  // live in Qualtrics itself. See QUALTRICS_INTEGRATION.md for wiring.
   //
   // URL parameters accepted:
   //   pid            participant/response ID to echo back (default: random)
@@ -25,9 +25,17 @@
   //   diffDifficulty spot-the-difference difficulty: 'easy' | 'medium' |
   //                  'hard' (default 'medium') — controls how many shapes/
   //                  differences per picture pair
+  //   linkDuration   连连看 task duration in seconds (default 150)
+  //   linkDifficulty 连连看 difficulty: 'easy' | 'medium' | 'hard' (default
+  //                  'medium') — controls board size / number of symbols.
+  //                  Scoring: each FULLY CLEARED board is worth 1 base
+  //                  point; clearing a board faster than the difficulty's
+  //                  typical pace earns a fractional speed bonus on top
+  //                  (see computeLinkCombinedTotals), so both "how many
+  //                  boards" and "how fast" contribute to the score.
   //   bias           'win' | 'lose' | 'tie' | 'random' — probabilistic
-  //                  tendency for the participant's own team across BOTH
-  //                  tasks, not a hard guarantee (default 'random')
+  //                  tendency for the participant's own team across ALL
+  //                  THREE tasks, not a hard guarantee (default 'random')
   //   returnUrl      if set, a "continue" button on the final results screen
   //                  appends result fields (prefixed sit_) to this URL as
   //                  query params and navigates there
@@ -78,6 +86,8 @@
     difficulty: ['easy', 'medium', 'hard'].includes(qs.get('difficulty')) ? qs.get('difficulty') : 'medium',
     diffDurationSec: clampInt(qs.get('diffDuration'), 120, 10, 1800),
     diffDifficulty: ['easy', 'medium', 'hard'].includes(qs.get('diffDifficulty')) ? qs.get('diffDifficulty') : 'medium',
+    linkDurationSec: clampInt(qs.get('linkDuration'), 150, 10, 1800),
+    linkDifficulty: ['easy', 'medium', 'hard'].includes(qs.get('linkDifficulty')) ? qs.get('linkDifficulty') : 'medium',
     bias: ['win', 'lose', 'tie', 'random'].includes(qs.get('bias')) ? qs.get('bias') : 'random',
     returnUrl: qs.get('returnUrl') || '',
     targetOrigin: qs.get('origin') || '*',
@@ -175,6 +185,14 @@
   // Average seconds for a bot to complete one full picture pair (i.e. find
   // every difference in it) — roughly (per-difference time) x (diff count).
   const DIFF_BASE_INTERVAL_SEC = { easy: 14, medium: 26, hard: 45 };
+  // Average seconds for a bot to fully clear one 连连看 board — roughly
+  // (per-pair search time) x (pair count). Also used as the "par time" a
+  // completed board is compared against when computing the speed bonus.
+  const LINK_BASE_INTERVAL_SEC = { easy: 20, medium: 45, hard: 80 };
+  // A board cleared in 0 seconds would earn a full +1.0 bonus point on top
+  // of its +1.0 base point; a board cleared at exactly the par time earns
+  // +0; slower than par earns +0 (never negative).
+  const LINK_BONUS_WEIGHT = 1;
 
   // ---------------------------------------------------------------------
   // Shared state
@@ -185,9 +203,10 @@
     roster: built.roster,
     group: built.realGroup,
     label: built.realLabel,
-    phase: 'intro', // intro | math | math_done | diff | results
+    phase: 'intro', // intro | math | math_done | diff | diff_done | link | results
     math: { schedule: null, correctCount: 0, currentProblem: null, lastAnswerResult: null, startAt: null, endAt: null, teams: { A: [], B: [] }, totals: { A: 0, B: 0 } },
     diff: { schedule: null, pairsCompleted: 0, round: null, foundInRound: 0, startAt: null, endAt: null, teams: { A: [], B: [] }, totals: { A: 0, B: 0 } },
+    link: { schedule: null, board: null, boardsCompleted: 0, selected: null, completionTimestamps: [], startAt: null, endAt: null, teams: { A: [], B: [] }, totals: { A: 0, B: 0 } },
   };
   if (CONFIG.debug) window.__sitDebug = { get state() { return S; }, CONFIG };
 
@@ -196,6 +215,8 @@
     if (S.phase === 'math') return renderMathPlaying();
     if (S.phase === 'math_done') return renderMathDone();
     if (S.phase === 'diff') return renderDiffPlaying();
+    if (S.phase === 'diff_done') return renderDiffDone();
+    if (S.phase === 'link') return renderLinkPlaying();
     if (S.phase === 'results') return renderResults();
   }
 
@@ -217,7 +238,7 @@
     app.innerHTML = `
       <div class="card center">
         <h1>你被分配到 <span class="badge ${groupColor}">Group ${esc(S.group)}</span></h1>
-        <p class="muted">你的编号：Participant ${esc(S.label)}。以下是本轮所有参与者的分组情况。接下来有两个合作任务：先是计算比赛，然后是"大家来找茬"。</p>
+        <p class="muted">你的编号：Participant ${esc(S.label)}。以下是本轮所有参与者的分组情况。接下来有三个合作任务：先是计算比赛，然后是"大家来找茬"，最后是"连连看"。</p>
       </div>
       <div class="card">
         <h2>队伍名单</h2>
@@ -379,9 +400,8 @@
       updateDiffTimerDom();
       if (Date.now() >= d.endAt) {
         clearInterval(diffTickHandle);
-        S.phase = 'results';
+        S.phase = 'diff_done';
         render();
-        reportCompletion();
       }
     }, 400);
   }
@@ -471,6 +491,197 @@
     if (c) c.textContent = d.pairsCompleted;
   }
 
+  function renderDiffDone() {
+    const d = S.diff;
+    app.innerHTML = `
+      <div class="card center">
+        <h1>任务二结束</h1>
+        <p class="lead">你一共完成了 ${d.pairsCompleted} 组"找茬"。接下来是任务三："连连看"——点击两个相同的方块，如果它们之间能用不超过两个转角的连线连起来（且中间没有其他方块挡住）就会被消除，把整个棋盘清空算完成一局，越快清空得分越高。</p>
+        ${renderScoreboardHtml(d.teams, d.totals)}
+        <button id="start-link-btn" class="mt" style="width:100%;">开始任务三：连连看</button>
+      </div>`;
+    document.getElementById('start-link-btn').addEventListener('click', startLinkTask);
+  }
+
+  // =======================================================================
+  // Task 3: tile-pair matching (连连看)
+  // =======================================================================
+  function startLinkTask() {
+    const l = S.link;
+    l.schedule = generatePointSchedule(S.roster, S.group, CONFIG.linkDurationSec, LINK_BASE_INTERVAL_SEC[CONFIG.linkDifficulty], CONFIG.bias);
+    l.startAt = Date.now();
+    l.endAt = l.startAt + CONFIG.linkDurationSec * 1000;
+    l.boardsCompleted = 0;
+    l.completionTimestamps = [];
+    l.selected = null;
+    S.phase = 'link';
+    render();
+    linkTick();
+    nextLinkRound();
+  }
+
+  let linkTickHandle = null;
+  function linkTick() {
+    if (linkTickHandle) clearInterval(linkTickHandle);
+    linkTickHandle = setInterval(() => {
+      const l = S.link;
+      const elapsedMs = Math.max(0, Math.min(Date.now(), l.endAt) - l.startAt);
+      const { teams, totals } = computeScoreboard(S.roster, l.schedule, S.group, l.boardsCompleted, elapsedMs);
+      l.teams = teams; l.totals = totals;
+      updateLinkScoreboardDom();
+      updateLinkTimerDom();
+      if (Date.now() >= l.endAt) {
+        clearInterval(linkTickHandle);
+        S.phase = 'results';
+        render();
+        reportCompletion();
+      }
+    }, 400);
+  }
+
+  function nextLinkRound() {
+    const l = S.link;
+    if (S.phase !== 'link') return;
+    l.board = LinkMatch.generateBoard(CONFIG.linkDifficulty);
+    l.selected = null;
+    renderLinkBoardDom();
+    updateLinkProgressDom();
+  }
+
+  function remainingCount(board) { return board.cells.filter((v) => v !== null).length; }
+
+  function handleLinkTileClick(idx) {
+    const l = S.link;
+    if (S.phase !== 'link' || !l.board) return;
+    if (l.board.cells[idx] === null) return; // already cleared
+    if (l.selected === null) {
+      l.selected = idx;
+      renderLinkBoardDom();
+      return;
+    }
+    if (l.selected === idx) {
+      l.selected = null; // clicked the same tile again — deselect
+      renderLinkBoardDom();
+      return;
+    }
+    const a = { r: Math.floor(l.selected / l.board.cols), c: l.selected % l.board.cols };
+    const b = { r: Math.floor(idx / l.board.cols), c: idx % l.board.cols };
+    const sameSymbol = l.board.cells[l.selected] === l.board.cells[idx];
+    const connects = sameSymbol && LinkMatch.canConnect(l.board, a.r, a.c, b.r, b.c);
+    if (connects) {
+      l.board.cells[l.selected] = null;
+      l.board.cells[idx] = null;
+      l.selected = null;
+      if (remainingCount(l.board) === 0) {
+        l.boardsCompleted++;
+        l.completionTimestamps.push(Date.now() - l.startAt);
+        updateLinkScoreboardDomImmediate();
+        setTimeout(nextLinkRound, 450);
+        return;
+      }
+      if (!LinkMatch.hasAnyValidMove(l.board)) {
+        LinkMatch.reshuffleUntilSolvable(l.board);
+      }
+      renderLinkBoardDom();
+      updateLinkProgressDom();
+    } else {
+      // Not a valid match — just move the selection to the newly clicked tile.
+      l.selected = idx;
+      renderLinkBoardDom();
+    }
+  }
+
+  function updateLinkScoreboardDomImmediate() {
+    const l = S.link;
+    const elapsedMs = Math.max(0, Math.min(Date.now(), l.endAt) - l.startAt);
+    const { teams, totals } = computeScoreboard(S.roster, l.schedule, S.group, l.boardsCompleted, elapsedMs);
+    l.teams = teams; l.totals = totals;
+    updateLinkScoreboardDom();
+  }
+
+  function renderLinkPlaying() {
+    const l = S.link;
+    const msLeft = Math.max(0, (l.endAt || Date.now() + CONFIG.linkDurationSec * 1000) - Date.now());
+    app.innerHTML = `
+      <div class="card">
+        <div class="timer">任务三 · 剩余时间 <span id="timer-display">${formatTime(Math.ceil(msLeft / 1000))}</span></div>
+        <p class="center muted" id="link-progress">点击两个相同的方块试试看</p>
+        <div id="link-grid-slot"></div>
+        <p class="center muted mt" style="font-size:0.85rem;">已完成 <span id="link-completed">${l.boardsCompleted}</span> 局</p>
+      </div>
+      <div class="card">
+        <h2>实时计分板（完成局数）</h2>
+        <div id="scoreboard-slot">${renderScoreboardHtml(l.teams, l.totals)}</div>
+      </div>`;
+    if (l.board) renderLinkBoardDom();
+  }
+
+  function renderLinkBoardDom() {
+    const l = S.link;
+    const slot = document.getElementById('link-grid-slot');
+    if (!slot || !l.board) return;
+    const { cols, rows, cells } = l.board;
+    slot.innerHTML = `<div class="link-grid" style="grid-template-columns: repeat(${cols}, 1fr);">
+      ${cells.map((sym, idx) => {
+        if (sym === null) return `<div class="link-tile empty" data-idx="${idx}"></div>`;
+        const selectedCls = l.selected === idx ? ' selected' : '';
+        return `<button type="button" class="link-tile${selectedCls}" data-idx="${idx}">${esc(LinkMatch.SYMBOLS[sym % LinkMatch.SYMBOLS.length])}</button>`;
+      }).join('')}
+    </div>`;
+    slot.querySelectorAll('.link-tile:not(.empty)').forEach((el) => {
+      el.addEventListener('click', () => handleLinkTileClick(Number(el.dataset.idx)));
+    });
+  }
+
+  function updateLinkTimerDom() {
+    const el = document.getElementById('timer-display');
+    if (el) el.textContent = formatTime(Math.ceil(Math.max(0, S.link.endAt - Date.now()) / 1000));
+  }
+  function updateLinkScoreboardDom() {
+    const el = document.getElementById('scoreboard-slot');
+    if (el) el.innerHTML = renderScoreboardHtml(S.link.teams, S.link.totals);
+  }
+  function updateLinkProgressDom() {
+    const l = S.link;
+    const p = document.getElementById('link-progress');
+    if (p && l.board) p.textContent = `本局剩余 ${remainingCount(l.board)} / ${l.board.cells.length} 个方块`;
+    const c = document.getElementById('link-completed');
+    if (c) c.textContent = l.boardsCompleted;
+  }
+
+  // Combines each participant's base score (1 point per fully-cleared board)
+  // with a speed bonus (up to +LINK_BONUS_WEIGHT extra per board, scaled by
+  // how much faster than the difficulty's "par" time that board was
+  // cleared). Applied identically to the real participant (from their
+  // recorded completion timestamps) and every simulated bot (derived from
+  // their point schedule), so the comparison is apples-to-apples.
+  function computeLinkCombinedTotals(roster, schedule, realTimestamps, realGroupLabel, parTimeSec) {
+    const parMs = parTimeSec * 1000;
+    function scoreFromTimestamps(timestamps) {
+      let base = 0, bonus = 0, prev = 0;
+      for (const t of timestamps) {
+        base += 1;
+        const gap = t - prev;
+        bonus += Math.max(0, (parMs - gap) / parMs) * LINK_BONUS_WEIGHT;
+        prev = t;
+      }
+      return { base, bonus, combined: base + bonus };
+    }
+    const teams = { A: [], B: [] };
+    const totals = { A: 0, B: 0 };
+    for (const pt of roster) {
+      const timestamps = pt.isReal ? realTimestamps : (schedule[pt.id] || []);
+      const score = scoreFromTimestamps(timestamps);
+      teams[pt.groupLabel].push({ id: pt.id, label: pt.label, correctCount: Math.round(score.combined * 10) / 10, isReal: !!pt.isReal });
+      totals[pt.groupLabel] += score.combined;
+    }
+    totals.A = Math.round(totals.A * 10) / 10;
+    totals.B = Math.round(totals.B * 10) / 10;
+    teams.A.sort((a, b) => a.label - b.label);
+    teams.B.sort((a, b) => a.label - b.label);
+    return { teams, totals };
+  }
+
   // =======================================================================
   // Results + handoff back to Qualtrics
   // =======================================================================
@@ -482,16 +693,24 @@
   }
 
   function resultPayload() {
-    const m = S.math, d = S.diff;
-    const mathOutcome = outcomeFor(m.totals, S.group);
-    const diffOutcome = outcomeFor(d.totals, S.group);
-    const mathTeamTotal = m.totals[S.group] || 0;
+    const m = S.math, d = S.diff, l = S.link;
     const otherGroup = S.group === 'A' ? 'B' : 'A';
+
+    const mathOutcome = outcomeFor(m.totals, S.group);
+    const mathTeamTotal = m.totals[S.group] || 0;
     const mathOtherTotal = m.totals[otherGroup] || 0;
+
+    const diffOutcome = outcomeFor(d.totals, S.group);
     const diffTeamTotal = d.totals[S.group] || 0;
     const diffOtherTotal = d.totals[otherGroup] || 0;
-    const overallOwnTeamTotal = mathTeamTotal + diffTeamTotal;
-    const overallOtherTeamTotal = mathOtherTotal + diffOtherTotal;
+
+    const linkCombined = computeLinkCombinedTotals(S.roster, l.schedule || {}, l.completionTimestamps, S.group, LINK_BASE_INTERVAL_SEC[CONFIG.linkDifficulty]);
+    const linkOutcome = outcomeFor(linkCombined.totals, S.group);
+    const linkTeamTotal = linkCombined.totals[S.group] || 0;
+    const linkOtherTotal = linkCombined.totals[otherGroup] || 0;
+
+    const overallOwnTeamTotal = Math.round((mathTeamTotal + diffTeamTotal + linkTeamTotal) * 10) / 10;
+    const overallOtherTeamTotal = Math.round((mathOtherTotal + diffOtherTotal + linkOtherTotal) * 10) / 10;
     let overallOutcome = 'tie';
     if (overallOwnTeamTotal !== overallOtherTeamTotal) overallOutcome = overallOwnTeamTotal > overallOtherTeamTotal ? 'win' : 'lose';
 
@@ -504,6 +723,9 @@
       diffPairsCompleted: d.pairsCompleted,
       diffTeamTotal, diffOtherTeamTotal: diffOtherTotal, diffOutcome,
       diffDurationSec: CONFIG.diffDurationSec,
+      linkBoardsCompleted: l.boardsCompleted,
+      linkTeamTotal, linkOtherTeamTotal: linkOtherTotal, linkOutcome,
+      linkDurationSec: CONFIG.linkDurationSec,
       overallOwnTeamTotal, overallOtherTeamTotal, overallOutcome,
     };
   }
@@ -513,9 +735,10 @@
     const outcomeLabel = { win: '获胜', lose: '落后', tie: '平手' };
     app.innerHTML = `
       <div class="card center">
-        <h1>两个任务都完成了！</h1>
+        <h1>三个任务都完成了！</h1>
         <p class="lead">任务一（计算）：你答对 ${payload.mathOwnCorrect} 题，本队 ${payload.mathTeamTotal} : 对方 ${payload.mathOtherTeamTotal}（${outcomeLabel[payload.mathOutcome]}）</p>
         <p class="lead">任务二（找茬）：你完成 ${payload.diffPairsCompleted} 组，本队 ${payload.diffTeamTotal} : 对方 ${payload.diffOtherTeamTotal}（${outcomeLabel[payload.diffOutcome]}）</p>
+        <p class="lead">任务三（连连看）：你清空 ${payload.linkBoardsCompleted} 局，本队 ${payload.linkTeamTotal} : 对方 ${payload.linkOtherTeamTotal}（${outcomeLabel[payload.linkOutcome]}，含速度加分）</p>
         <div id="continue-slot" class="mt"></div>
       </div>`;
 

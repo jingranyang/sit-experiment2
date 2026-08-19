@@ -1,6 +1,7 @@
 // End-to-end browser test for the static GitHub-Pages game, using the
 // Playwright install already present in this image (no npm install needed).
-// Covers the two-task flow: math task -> spot-the-difference task -> results.
+// Covers the three-task flow: math task -> spot-the-difference task ->
+// tile-pair-matching (连连看) task -> results.
 process.env.PLAYWRIGHT_BROWSERS_PATH = process.env.PLAYWRIGHT_BROWSERS_PATH || '/opt/pw-browsers';
 const { chromium } = require('/home/claude/.npm-global/lib/node_modules/playwright');
 
@@ -41,6 +42,43 @@ async function h1Includes(ctx, text) {
   return !!h1 && h1.includes(text);
 }
 
+// Polls a predicate without touching math input — used for waiting through
+// phases (like the link task) that don't have a `.problem-text` element.
+async function waitUntil(predicate, maxMs) {
+  const start = Date.now();
+  while (Date.now() - start < maxMs) {
+    if (await predicate()) return true;
+    await sleep(120);
+  }
+  return false;
+}
+
+// Clears `numBoards` full 连连看 boards on `page` using the debug hook to
+// find a real connectable pair each time (LinkMatch.findValidPair), rather
+// than guessing — this exercises the actual path-finding/click handling,
+// not just "some click eventually works". Requires debug=1.
+async function clearLinkBoards(page, numBoards, maxMs) {
+  const startCount = await page.evaluate(() => window.__sitDebug.state.link.boardsCompleted);
+  const target = startCount + numBoards;
+  const start = Date.now();
+  while (Date.now() - start < maxMs) {
+    const count = await page.evaluate(() => window.__sitDebug.state.link.boardsCompleted);
+    if (count >= target) return true;
+    const pair = await page.evaluate(() => {
+      const board = window.__sitDebug.state.link.board;
+      if (!board) return null;
+      return window.LinkMatch.findValidPair(board);
+    });
+    if (!pair) { await sleep(100); continue; } // between-round transition
+    const [a, b] = pair;
+    await page.locator(`[data-idx="${a}"]`).click().catch(() => {});
+    await sleep(40);
+    await page.locator(`[data-idx="${b}"]`).click().catch(() => {});
+    await sleep(80);
+  }
+  return false;
+}
+
 // -----------------------------------------------------------------------
 // 1. Full standalone play-through, including actually clicking the correct
 //    spot-the-difference targets (using the debug hook to know exact
@@ -52,7 +90,7 @@ async function testStandalonePlay(browser) {
   page.on('pageerror', (e) => consoleErrors.push(String(e)));
   page.on('console', (msg) => { if (msg.type() === 'error') consoleErrors.push(msg.text()); });
 
-  await page.goto(`${BASE}/?pid=TESTP1&group=A&ingroup=3&outgroup=3&duration=6&difficulty=easy&diffDuration=15&diffDifficulty=easy&bias=win&debug=1`);
+  await page.goto(`${BASE}/?pid=TESTP1&group=A&ingroup=3&outgroup=3&duration=6&difficulty=easy&diffDuration=15&diffDifficulty=easy&linkDuration=25&linkDifficulty=easy&bias=win&debug=1`);
   await page.waitForSelector('h1');
   assert(await h1Includes(page, 'Group A'), 'intro screen shows the externally-forced group (Group A)');
 
@@ -98,16 +136,43 @@ async function testStandalonePlay(browser) {
   assert(stillMarkedFound === round1.diffs.length, 'all differences in round 1 were clicked and registered as found');
 
   // Let the diff task run out its remaining time (bots keep scoring) so we
-  // reach the final results screen.
-  const reachedResults = await answerMathUntil(page, () => h1Includes(page, '两个任务都完成了'), 20000);
-  assert(reachedResults, 'reaches the final "两个任务都完成了" results screen after both tasks finish');
+  // reach the diff_done transition screen.
+  const diffDone = await answerMathUntil(page, () => h1Includes(page, '任务二结束'), 20000);
+  assert(diffDone, 'diff task reaches the "任务二结束" screen within expected time');
+
+  await page.click('#start-link-btn');
+  await page.waitForSelector('.link-tile', { timeout: 3000 });
+
+  const firstPair = await page.evaluate(() => window.LinkMatch.findValidPair(window.__sitDebug.state.link.board));
+  assert(Array.isArray(firstPair) && firstPair.length === 2, `link board has at least one connectable pair to start (got ${JSON.stringify(firstPair)})`);
+  const remainingBefore = await page.evaluate(() => window.__sitDebug.state.link.board.cells.filter((v) => v !== null).length);
+  await page.locator(`[data-idx="${firstPair[0]}"]`).click();
+  await sleep(60);
+  await page.locator(`[data-idx="${firstPair[1]}"]`).click();
+  await sleep(150);
+  const remainingAfter = await page.evaluate(() => {
+    const b = window.__sitDebug.state.link.board;
+    return b ? b.cells.filter((v) => v !== null).length : 0;
+  });
+  assert(remainingAfter === remainingBefore - 2 || remainingAfter > remainingBefore, `clicking a real connectable pair clears exactly those two tiles (before ${remainingBefore}, after ${remainingAfter}; a higher "after" is fine if that pair completed the board and a fresh one was generated)`);
+
+  // Clear two full boards (using the debug hook to always click a genuinely
+  // connectable pair) to verify linkBoardsCompleted actually increments.
+  const clearedTwoBoards = await clearLinkBoards(page, 2, 15000);
+  assert(clearedTwoBoards, 'clearing every tile pair in consecutive boards increments linkBoardsCompleted to at least 2');
+
+  // Let the link task run out its remaining time so we reach the final
+  // results screen.
+  const reachedResults = await waitUntil(() => h1Includes(page, '三个任务都完成了'), 20000);
+  assert(reachedResults, 'reaches the final "三个任务都完成了" results screen after all three tasks finish');
 
   const finalPayload = await page.evaluate(() => {
     // Re-derive via the same debug hook rather than parsing rendered text.
     const S = window.__sitDebug.state;
-    return { diffPairsCompleted: S.diff.pairsCompleted, mathOwnCorrect: S.math.correctCount };
+    return { diffPairsCompleted: S.diff.pairsCompleted, mathOwnCorrect: S.math.correctCount, linkBoardsCompleted: S.link.boardsCompleted };
   });
   assert(finalPayload.diffPairsCompleted >= 1, `final state carries at least the one completed pair we clicked through (got ${finalPayload.diffPairsCompleted})`);
+  assert(finalPayload.linkBoardsCompleted >= 2, `final state carries at least the two completed link boards we cleared (got ${finalPayload.linkBoardsCompleted})`);
 
   assert(consoleErrors.length === 0, `no JS console errors during standalone play (got: ${JSON.stringify(consoleErrors)})`);
   await page.close();
@@ -121,7 +186,7 @@ async function testPostMessageIframe(browser) {
   const page = await browser.newPage();
   await page.setContent(`
     <html><body>
-      <iframe id="f" name="sitFrame" src="${BASE}/?pid=IFRAME_TEST&group=B&ingroup=1&outgroup=1&duration=3&difficulty=easy&diffDuration=3&diffDifficulty=easy&autostart=1" width="500" height="700"></iframe>
+      <iframe id="f" name="sitFrame" src="${BASE}/?pid=IFRAME_TEST&group=B&ingroup=1&outgroup=1&duration=3&difficulty=easy&diffDuration=3&diffDifficulty=easy&linkDuration=10&linkDifficulty=easy&autostart=1" width="500" height="700"></iframe>
       <script>
         window.__received = null;
         window.addEventListener('message', (ev) => {
@@ -136,18 +201,22 @@ async function testPostMessageIframe(browser) {
   assert(mathDone, 'iframe: math task completes automatically (autostart)');
   await frame.click('#start-diff-btn').catch((e) => assert(false, `could not click start-diff-btn inside iframe: ${e}`));
 
-  await page.waitForFunction(() => window.__received !== null, { timeout: 12000 }).catch(() => {});
+  const diffDone = await waitUntil(() => h1Includes(frame, '任务二结束'), 10000);
+  assert(diffDone, 'iframe: diff task completes automatically');
+  await frame.click('#start-link-btn').catch((e) => assert(false, `could not click start-link-btn inside iframe: ${e}`));
+
+  await page.waitForFunction(() => window.__received !== null, { timeout: 15000 }).catch(() => {});
   const received = await page.evaluate(() => window.__received);
-  assert(!!received, 'parent window received postMessage from embedded iframe after both tasks finished');
+  assert(!!received, 'parent window received postMessage from embedded iframe after all three tasks finished');
   if (received) {
     assert(received.pid === 'IFRAME_TEST', `payload echoes pid correctly (got "${received.pid}")`);
     assert(received.group === 'B', `payload echoes the externally-forced group B (got "${received.group}")`);
-    const numericFields = ['mathOwnCorrect', 'mathTeamTotal', 'mathOtherTeamTotal', 'diffPairsCompleted', 'diffTeamTotal', 'diffOtherTeamTotal', 'overallOwnTeamTotal', 'overallOtherTeamTotal'];
+    const numericFields = ['mathOwnCorrect', 'mathTeamTotal', 'mathOtherTeamTotal', 'diffPairsCompleted', 'diffTeamTotal', 'diffOtherTeamTotal', 'linkBoardsCompleted', 'linkTeamTotal', 'linkOtherTeamTotal', 'overallOwnTeamTotal', 'overallOtherTeamTotal'];
     const allNumeric = numericFields.every((k) => typeof received[k] === 'number');
-    assert(allNumeric, `payload includes all numeric fields for both tasks (got ${JSON.stringify(received)})`);
-    const outcomeFields = ['mathOutcome', 'diffOutcome', 'overallOutcome'];
+    assert(allNumeric, `payload includes all numeric fields for all three tasks (got ${JSON.stringify(received)})`);
+    const outcomeFields = ['mathOutcome', 'diffOutcome', 'linkOutcome', 'overallOutcome'];
     const allValidOutcomes = outcomeFields.every((k) => ['win', 'lose', 'tie'].includes(received[k]));
-    assert(allValidOutcomes, `payload includes valid outcome fields for math/diff/overall (got ${JSON.stringify(received)})`);
+    assert(allValidOutcomes, `payload includes valid outcome fields for math/diff/link/overall (got ${JSON.stringify(received)})`);
   }
   await page.close();
 }
@@ -158,14 +227,18 @@ async function testPostMessageIframe(browser) {
 async function testReturnUrlRedirect(browser) {
   const page = await browser.newPage();
   const returnUrl = 'http://localhost:8099/index.html'; // reuse the static server as a stand-in "Qualtrics" target
-  await page.goto(`${BASE}/?pid=REDIR_TEST&group=A&ingroup=1&outgroup=1&duration=3&difficulty=easy&diffDuration=3&diffDifficulty=easy&autostart=1&returnUrl=${encodeURIComponent(returnUrl)}`);
+  await page.goto(`${BASE}/?pid=REDIR_TEST&group=A&ingroup=1&outgroup=1&duration=3&difficulty=easy&diffDuration=3&diffDifficulty=easy&linkDuration=10&linkDifficulty=easy&autostart=1&returnUrl=${encodeURIComponent(returnUrl)}`);
 
   const mathDone = await answerMathUntil(page, () => h1Includes(page, '任务一结束'), 10000);
   assert(mathDone, 'returnUrl flow: math task completes');
   await page.click('#start-diff-btn');
 
-  const reachedResults = await answerMathUntil(page, () => h1Includes(page, '两个任务都完成了'), 10000);
-  assert(reachedResults, 'returnUrl flow: diff task completes and results screen is shown');
+  const diffDone = await waitUntil(() => h1Includes(page, '任务二结束'), 10000);
+  assert(diffDone, 'returnUrl flow: diff task completes');
+  await page.click('#start-link-btn');
+
+  const reachedResults = await waitUntil(() => h1Includes(page, '三个任务都完成了'), 15000);
+  assert(reachedResults, 'returnUrl flow: link task completes and results screen is shown');
 
   await page.click('button:has-text("继续")');
   await page.waitForLoadState('load');
@@ -174,6 +247,7 @@ async function testReturnUrlRedirect(browser) {
   assert(finalUrl.searchParams.get('sit_pid') === 'REDIR_TEST', 'returnUrl carries sit_pid query param');
   assert(finalUrl.searchParams.has('sit_mathOutcome'), 'returnUrl carries sit_mathOutcome query param');
   assert(finalUrl.searchParams.has('sit_diffPairsCompleted'), 'returnUrl carries sit_diffPairsCompleted query param');
+  assert(finalUrl.searchParams.has('sit_linkBoardsCompleted'), 'returnUrl carries sit_linkBoardsCompleted query param');
   assert(finalUrl.searchParams.has('sit_overallOutcome'), 'returnUrl carries sit_overallOutcome query param');
   await page.close();
 }
