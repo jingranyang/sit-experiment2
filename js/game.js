@@ -227,7 +227,7 @@
       <div class="team-col ${cls}">
         <h3>Group ${team}</h3>
         <ul class="member-list">
-          ${list.map((p) => `<li class="member-row ${p.id === 'self' ? 'me' : ''}"><span>Participant ${p.label}${p.id === 'self' ? '（你）' : ''}</span></li>`).join('')}
+          ${list.map((p) => `<li class="member-row ${p.id === 'self' ? 'me' : ''}"><span>Participant ${p.label}${p.id === 'self' ? ' (you)' : ''}</span></li>`).join('')}
         </ul>
       </div>`;
     return `<div class="team-columns">${col('A', teamA, 'a')}${col('B', teamB, 'b')}</div>`;
@@ -237,13 +237,13 @@
     const groupColor = S.group === 'A' ? 'a' : 'b';
     app.innerHTML = `
       <div class="card center">
-        <h1>你被分配到 <span class="badge ${groupColor}">Group ${esc(S.group)}</span></h1>
-        <p class="muted">你的编号：Participant ${esc(S.label)}。以下是本轮所有参与者的分组情况。接下来有三个合作任务：先是计算比赛，然后是"大家来找茬"，最后是"连连看"。</p>
+        <h1>You have been assigned to <span class="badge ${groupColor}">Group ${esc(S.group)}</span></h1>
+        <p class="muted">Your ID: Participant ${esc(S.label)}. Below is the team assignment for everyone in this round. Next there are three cooperative tasks: first a calculation challenge, then "Spot the Difference", and finally "Match Pairs".</p>
       </div>
       <div class="card">
-        <h2>队伍名单</h2>
+        <h2>Team Roster</h2>
         ${renderRosterColumns()}
-        <button id="start-btn" class="mt" style="width:100%;">开始任务一：合作计算</button>
+        <button id="start-btn" class="mt" style="width:100%;">Start Task 1: Cooperative Calculation</button>
       </div>`;
     document.getElementById('start-btn').addEventListener('click', startMathTask);
   }
@@ -305,14 +305,14 @@
     const msLeft = Math.max(0, (m.endAt || Date.now() + CONFIG.durationSec * 1000) - Date.now());
     app.innerHTML = `
       <div class="card">
-        <div class="timer">任务一 · 剩余时间 <span id="timer-display">${formatTime(Math.ceil(msLeft / 1000))}</span></div>
+        <div class="timer">Task 1 · Time Remaining <span id="timer-display">${formatTime(Math.ceil(msLeft / 1000))}</span></div>
         <div class="problem-box" id="problem-box">
           <div class="problem-text">${m.currentProblem ? esc(m.currentProblem.text) + ' = ?' : '…'}</div>
-          <input type="number" id="answer-input" placeholder="输入答案后按回车" autocomplete="off" style="max-width:200px; margin:0 auto; text-align:center; font-size:1.2rem;" />
+          <input type="number" id="answer-input" placeholder="Type your answer and press Enter" autocomplete="off" style="max-width:200px; margin:0 auto; text-align:center; font-size:1.2rem;" />
         </div>
       </div>
       <div class="card">
-        <h2>实时计分板</h2>
+        <h2>Live Scoreboard</h2>
         <div id="scoreboard-slot">${renderScoreboardHtml(m.teams, m.totals)}</div>
       </div>`;
     const inp = document.getElementById('answer-input');
@@ -349,10 +349,10 @@
       const list = (teams[team] || []).slice().sort((a, b) => a.label - b.label);
       return `
         <div class="team-col ${cls}">
-          <h3>Group ${team}${team === S.group ? '（你的队伍）' : ''}</h3>
+          <h3>Group ${team}${team === S.group ? ' (your team)' : ''}</h3>
           <div class="team-total">${totals[team] || 0}</div>
           <ul class="member-list">
-            ${list.map((p) => `<li class="member-row ${p.isReal ? 'me' : ''}"><span>Participant ${p.label}${p.isReal ? '（你）' : ''}</span><span class="count">${p.correctCount}</span></li>`).join('')}
+            ${list.map((p) => `<li class="member-row ${p.isReal ? 'me' : ''}"><span>Participant ${p.label}${p.isReal ? ' (you)' : ''}</span><span class="count">${p.correctCount}</span></li>`).join('')}
           </ul>
         </div>`;
     };
@@ -363,10 +363,10 @@
     const m = S.math;
     app.innerHTML = `
       <div class="card center">
-        <h1>任务一结束</h1>
-        <p class="lead">你一共答对了 ${m.correctCount} 题。接下来是任务二："大家来找茬"——和你的队友、对方队伍比一比，看谁能更快找出两幅图之间的所有不同之处。</p>
+        <h1>Task 1 Complete</h1>
+        <p class="lead">You answered ${m.correctCount} problems correctly. Next is Task 2: "Spot the Difference" — compete with your teammates against the other team to see who can find all the differences between two pictures fastest.</p>
         ${renderScoreboardHtml(m.teams, m.totals)}
-        <button id="start-diff-btn" class="mt" style="width:100%;">开始任务二：大家来找茬</button>
+        <button id="start-diff-btn" class="mt" style="width:100%;">Start Task 2: Spot the Difference</button>
       </div>`;
     document.getElementById('start-diff-btn').addEventListener('click', startDiffTask);
   }
@@ -456,16 +456,16 @@
     const msLeft = Math.max(0, (d.endAt || Date.now() + CONFIG.diffDurationSec * 1000) - Date.now());
     app.innerHTML = `
       <div class="card">
-        <div class="timer">任务二 · 剩余时间 <span id="timer-display">${formatTime(Math.ceil(msLeft / 1000))}</span></div>
-        <p class="center muted" id="diff-progress">找找看两张图有什么不同吧</p>
+        <div class="timer">Task 2 · Time Remaining <span id="timer-display">${formatTime(Math.ceil(msLeft / 1000))}</span></div>
+        <p class="center muted" id="diff-progress">Find what's different between the two pictures</p>
         <div style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap;">
           <canvas id="diff-canvas-a" width="${DIFF_CANVAS_W}" height="${DIFF_CANVAS_H}" style="border-radius:8px; cursor:crosshair;"></canvas>
           <canvas id="diff-canvas-b" width="${DIFF_CANVAS_W}" height="${DIFF_CANVAS_H}" style="border-radius:8px; cursor:crosshair;"></canvas>
         </div>
-        <p class="center muted mt" style="font-size:0.85rem;">已完成 <span id="diff-completed">${d.pairsCompleted}</span> 组</p>
+        <p class="center muted mt" style="font-size:0.85rem;">Completed <span id="diff-completed">${d.pairsCompleted}</span> pair(s)</p>
       </div>
       <div class="card">
-        <h2>实时计分板（完成组数）</h2>
+        <h2>Live Scoreboard (Pairs Completed)</h2>
         <div id="scoreboard-slot">${renderScoreboardHtml(d.teams, d.totals)}</div>
       </div>`;
     const canvasA = document.getElementById('diff-canvas-a');
@@ -486,7 +486,7 @@
   function updateDiffProgressDom() {
     const d = S.diff;
     const p = document.getElementById('diff-progress');
-    if (p) p.textContent = d.round ? `本轮已找到 ${d.foundInRound} / ${d.round.diffs.length} 处不同` : '';
+    if (p) p.textContent = d.round ? `Found ${d.foundInRound} / ${d.round.diffs.length} difference(s) this round` : '';
     const c = document.getElementById('diff-completed');
     if (c) c.textContent = d.pairsCompleted;
   }
@@ -495,10 +495,10 @@
     const d = S.diff;
     app.innerHTML = `
       <div class="card center">
-        <h1>任务二结束</h1>
-        <p class="lead">你一共完成了 ${d.pairsCompleted} 组"找茬"。接下来是任务三："连连看"——点击两个相同的方块，如果它们之间能用不超过两个转角的连线连起来（且中间没有其他方块挡住）就会被消除，把整个棋盘清空算完成一局，越快清空得分越高。</p>
+        <h1>Task 2 Complete</h1>
+        <p class="lead">You completed ${d.pairsCompleted} pair(s) in "Spot the Difference". Next is Task 3: "Match Pairs" — click two matching tiles; if they can be connected by a path with at most two turns (with nothing blocking in between), they'll be cleared. Clearing the whole board counts as one round — the faster you clear it, the higher your score.</p>
         ${renderScoreboardHtml(d.teams, d.totals)}
-        <button id="start-link-btn" class="mt" style="width:100%;">开始任务三：连连看</button>
+        <button id="start-link-btn" class="mt" style="width:100%;">Start Task 3: Match Pairs</button>
       </div>`;
     document.getElementById('start-link-btn').addEventListener('click', startLinkTask);
   }
@@ -604,13 +604,13 @@
     const msLeft = Math.max(0, (l.endAt || Date.now() + CONFIG.linkDurationSec * 1000) - Date.now());
     app.innerHTML = `
       <div class="card">
-        <div class="timer">任务三 · 剩余时间 <span id="timer-display">${formatTime(Math.ceil(msLeft / 1000))}</span></div>
-        <p class="center muted" id="link-progress">点击两个相同的方块试试看</p>
+        <div class="timer">Task 3 · Time Remaining <span id="timer-display">${formatTime(Math.ceil(msLeft / 1000))}</span></div>
+        <p class="center muted" id="link-progress">Click two matching tiles to try</p>
         <div id="link-grid-slot"></div>
-        <p class="center muted mt" style="font-size:0.85rem;">已完成 <span id="link-completed">${l.boardsCompleted}</span> 局</p>
+        <p class="center muted mt" style="font-size:0.85rem;">Completed <span id="link-completed">${l.boardsCompleted}</span> round(s)</p>
       </div>
       <div class="card">
-        <h2>实时计分板（完成局数）</h2>
+        <h2>Live Scoreboard (Rounds Completed)</h2>
         <div id="scoreboard-slot">${renderScoreboardHtml(l.teams, l.totals)}</div>
       </div>`;
     if (l.board) renderLinkBoardDom();
@@ -644,7 +644,7 @@
   function updateLinkProgressDom() {
     const l = S.link;
     const p = document.getElementById('link-progress');
-    if (p && l.board) p.textContent = `本局剩余 ${remainingCount(l.board)} / ${l.board.cells.length} 个方块`;
+    if (p && l.board) p.textContent = `${remainingCount(l.board)} / ${l.board.cells.length} tile(s) remaining this round`;
     const c = document.getElementById('link-completed');
     if (c) c.textContent = l.boardsCompleted;
   }
@@ -732,13 +732,13 @@
 
   function renderResults() {
     const payload = resultPayload();
-    const outcomeLabel = { win: '获胜', lose: '落后', tie: '平手' };
+    const outcomeLabel = { win: 'Ahead', lose: 'Behind', tie: 'Tied' };
     app.innerHTML = `
       <div class="card center">
-        <h1>三个任务都完成了！</h1>
-        <p class="lead">任务一（计算）：你答对 ${payload.mathOwnCorrect} 题，本队 ${payload.mathTeamTotal} : 对方 ${payload.mathOtherTeamTotal}（${outcomeLabel[payload.mathOutcome]}）</p>
-        <p class="lead">任务二（找茬）：你完成 ${payload.diffPairsCompleted} 组，本队 ${payload.diffTeamTotal} : 对方 ${payload.diffOtherTeamTotal}（${outcomeLabel[payload.diffOutcome]}）</p>
-        <p class="lead">任务三（连连看）：你清空 ${payload.linkBoardsCompleted} 局，本队 ${payload.linkTeamTotal} : 对方 ${payload.linkOtherTeamTotal}（${outcomeLabel[payload.linkOutcome]}，含速度加分）</p>
+        <h1>All Three Tasks Complete!</h1>
+        <p class="lead">Task 1 (Calculation): You answered ${payload.mathOwnCorrect} correctly. Your team ${payload.mathTeamTotal} : Other team ${payload.mathOtherTeamTotal} (${outcomeLabel[payload.mathOutcome]})</p>
+        <p class="lead">Task 2 (Spot the Difference): You completed ${payload.diffPairsCompleted} pair(s). Your team ${payload.diffTeamTotal} : Other team ${payload.diffOtherTeamTotal} (${outcomeLabel[payload.diffOutcome]})</p>
+        <p class="lead">Task 3 (Match Pairs): You cleared ${payload.linkBoardsCompleted} round(s). Your team ${payload.linkTeamTotal} : Other team ${payload.linkOtherTeamTotal} (${outcomeLabel[payload.linkOutcome]}, includes speed bonus)</p>
         <div id="continue-slot" class="mt"></div>
       </div>`;
 
@@ -746,7 +746,7 @@
     if (CONFIG.returnUrl) {
       const btn = document.createElement('button');
       btn.style.width = '100%';
-      btn.textContent = '继续（返回问卷）';
+      btn.textContent = 'Continue (Return to Survey)';
       btn.addEventListener('click', () => {
         const url = new URL(CONFIG.returnUrl);
         Object.entries(payload).forEach(([k, v]) => url.searchParams.set('sit_' + k, v));
@@ -756,7 +756,7 @@
     } else {
       const notice = document.createElement('div');
       notice.className = 'notice';
-      notice.innerHTML = '本页未配置返回地址（returnUrl），如果这个页面是被 Qualtrics 用 iframe 嵌入的，结果已经通过 postMessage 自动发送，无需额外操作。';
+      notice.innerHTML = 'No returnUrl is configured for this page. If this page is embedded via an iframe in Qualtrics, the results have already been sent automatically via postMessage — no further action is needed.';
       slot.appendChild(notice);
     }
   }

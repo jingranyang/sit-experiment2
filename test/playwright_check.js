@@ -100,8 +100,8 @@ async function testStandalonePlay(browser) {
   await page.click('#start-btn');
   await page.waitForSelector('#answer-input', { timeout: 3000 });
 
-  const mathDone = await answerMathUntil(page, () => h1Includes(page, '任务一结束'), 12000);
-  assert(mathDone, 'math task reaches the "任务一结束" screen within expected time');
+  const mathDone = await answerMathUntil(page, () => h1Includes(page, 'Task 1 Complete'), 12000);
+  assert(mathDone, 'math task reaches the "Task 1 Complete" screen within expected time');
 
   const mathTotalsText = await page.locator('.team-total').allTextContents();
   assert(mathTotalsText.length === 2, 'math results screen shows two team totals');
@@ -137,8 +137,8 @@ async function testStandalonePlay(browser) {
 
   // Let the diff task run out its remaining time (bots keep scoring) so we
   // reach the diff_done transition screen.
-  const diffDone = await answerMathUntil(page, () => h1Includes(page, '任务二结束'), 20000);
-  assert(diffDone, 'diff task reaches the "任务二结束" screen within expected time');
+  const diffDone = await answerMathUntil(page, () => h1Includes(page, 'Task 2 Complete'), 20000);
+  assert(diffDone, 'diff task reaches the "Task 2 Complete" screen within expected time');
 
   await page.click('#start-link-btn');
   await page.waitForSelector('.link-tile', { timeout: 3000 });
@@ -163,8 +163,8 @@ async function testStandalonePlay(browser) {
 
   // Let the link task run out its remaining time so we reach the final
   // results screen.
-  const reachedResults = await waitUntil(() => h1Includes(page, '三个任务都完成了'), 20000);
-  assert(reachedResults, 'reaches the final "三个任务都完成了" results screen after all three tasks finish');
+  const reachedResults = await waitUntil(() => h1Includes(page, 'All Three Tasks Complete'), 20000);
+  assert(reachedResults, 'reaches the final "All Three Tasks Complete" results screen after all three tasks finish');
 
   const finalPayload = await page.evaluate(() => {
     // Re-derive via the same debug hook rather than parsing rendered text.
@@ -197,11 +197,11 @@ async function testPostMessageIframe(browser) {
   `, { waitUntil: 'load' });
 
   const frame = page.frame({ name: 'sitFrame' });
-  const mathDone = await answerMathUntil(frame, () => h1Includes(frame, '任务一结束'), 10000);
+  const mathDone = await answerMathUntil(frame, () => h1Includes(frame, 'Task 1 Complete'), 10000);
   assert(mathDone, 'iframe: math task completes automatically (autostart)');
   await frame.click('#start-diff-btn').catch((e) => assert(false, `could not click start-diff-btn inside iframe: ${e}`));
 
-  const diffDone = await waitUntil(() => h1Includes(frame, '任务二结束'), 10000);
+  const diffDone = await waitUntil(() => h1Includes(frame, 'Task 2 Complete'), 10000);
   assert(diffDone, 'iframe: diff task completes automatically');
   await frame.click('#start-link-btn').catch((e) => assert(false, `could not click start-link-btn inside iframe: ${e}`));
 
@@ -229,18 +229,18 @@ async function testReturnUrlRedirect(browser) {
   const returnUrl = 'http://localhost:8099/index.html'; // reuse the static server as a stand-in "Qualtrics" target
   await page.goto(`${BASE}/?pid=REDIR_TEST&group=A&ingroup=1&outgroup=1&duration=3&difficulty=easy&diffDuration=3&diffDifficulty=easy&linkDuration=10&linkDifficulty=easy&autostart=1&returnUrl=${encodeURIComponent(returnUrl)}`);
 
-  const mathDone = await answerMathUntil(page, () => h1Includes(page, '任务一结束'), 10000);
+  const mathDone = await answerMathUntil(page, () => h1Includes(page, 'Task 1 Complete'), 10000);
   assert(mathDone, 'returnUrl flow: math task completes');
   await page.click('#start-diff-btn');
 
-  const diffDone = await waitUntil(() => h1Includes(page, '任务二结束'), 10000);
+  const diffDone = await waitUntil(() => h1Includes(page, 'Task 2 Complete'), 10000);
   assert(diffDone, 'returnUrl flow: diff task completes');
   await page.click('#start-link-btn');
 
-  const reachedResults = await waitUntil(() => h1Includes(page, '三个任务都完成了'), 15000);
+  const reachedResults = await waitUntil(() => h1Includes(page, 'All Three Tasks Complete'), 15000);
   assert(reachedResults, 'returnUrl flow: link task completes and results screen is shown');
 
-  await page.click('button:has-text("继续")');
+  await page.click('button:has-text("Continue")');
   await page.waitForLoadState('load');
   const finalUrl = new URL(page.url());
   assert(finalUrl.pathname === '/index.html', `clicking continue navigated to the configured returnUrl (got ${page.url()})`);
