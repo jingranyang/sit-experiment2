@@ -109,7 +109,23 @@ window.SpotDiff = (function () {
     ctx.restore();
   }
 
-  function render(canvas, shapes, round, side) {
+  // Distinct dashed gold ring used to surface a teammate-given hint, so it
+  // reads differently from the green "you already found this" marker.
+  function drawHintMarker(ctx, x, y, r) {
+    ctx.save();
+    ctx.strokeStyle = '#ffd166';
+    ctx.lineWidth = 3;
+    ctx.setLineDash([6, 5]);
+    ctx.beginPath();
+    ctx.arc(x, y, r + 14, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // `hintIndex`, if provided, points into round.diffs at an as-yet-unfound
+  // difference to highlight with the dashed hint marker (used by the
+  // mutual-help mechanic; the participant still has to notice/click it).
+  function render(canvas, shapes, round, side, hintIndex) {
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = '#1f2440';
@@ -120,6 +136,13 @@ window.SpotDiff = (function () {
       if (side === 'A') drawFoundMarker(ctx, d.aX, d.aY, d.aR);
       else drawFoundMarker(ctx, d.bX, d.bY, d.bR);
     });
+    if (hintIndex !== undefined && hintIndex !== null) {
+      const hd = round.diffs[hintIndex];
+      if (hd && !hd.found) {
+        if (side === 'A') drawHintMarker(ctx, hd.aX, hd.aY, hd.aR);
+        else drawHintMarker(ctx, hd.bX, hd.bY, hd.bR);
+      }
+    }
   }
 
   // Returns the diff object hit by a click at (x, y) on the given side, or

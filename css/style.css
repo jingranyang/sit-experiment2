@@ -125,6 +125,29 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .link-tile:hover { filter: brightness(1.15); }
 .link-tile.selected { outline: 3px solid var(--color-accent); background: var(--color-a-dim); }
 .link-tile.empty { background: transparent; border: 1px dashed rgba(255,255,255,0.08); cursor: default; }
+.link-tile.hint { outline: 3px dashed #ffd166; }
+
+.help-panel { border: 1px solid #6a5b1c; background: linear-gradient(180deg, rgba(255,209,102,0.06), transparent); }
+.help-status { font-size: 0.92rem; }
+.help-target-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.help-target-btn { background: #ffd166; color: #2a2109; padding: 8px 14px; font-size: 0.85rem; }
+.help-target-btn:hover { filter: brightness(1.05); }
+.help-feed {
+  list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px;
+  font-size: 0.82rem; color: var(--color-muted);
+}
+.help-feed li { background: rgba(255,209,102,0.08); border-radius: 6px; padding: 4px 8px; }
+
+.hint-text { min-height: 1.1em; font-size: 0.85rem; color: #ffd166; margin-top: 8px; }
+
+.help-toast {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px);
+  background: #2a2109; border: 1px solid #6a5b1c; color: #ffd166;
+  padding: 10px 18px; border-radius: 999px; font-size: 0.9rem; font-weight: 600;
+  opacity: 0; pointer-events: none; transition: opacity 0.25s ease, transform 0.25s ease;
+  z-index: 1000; max-width: 90vw; text-align: center;
+}
+.help-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
 .center { text-align: center; }
 .muted { color: var(--color-muted); }

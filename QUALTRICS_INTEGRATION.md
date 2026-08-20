@@ -8,6 +8,12 @@ The static page in this repository's root directory (`index.html` + `css/` + `js
 
 All three tasks use the same random group assignment and the same set of simulated teammates/opponents. Participants complete Task 1, then Task 2, then Task 3, and see a combined summary at the end. Informed consent, instructions, the allocation task, the survey, and the debrief should all live in Qualtrics.
 
+### Mutual help
+
+Within each task, every `helpThreshold` units of the participant's own progress (correct answers / completed diff pairs / cleared link boards — default 5) earns one "help charge". When a charge is available, a **Mutual Help** panel appears listing every in-group teammate by name (e.g. "Help Participant 4") — the participant picks which specific teammate to help; there is no auto-selected target. Spending a charge gives that teammate an extra point on the scoreboard.
+
+In the other direction, teammates periodically send the participant an unprompted hint (roughly every 20-30 seconds per task, randomized): the correct answer in Task 1, a highlighted not-yet-found difference in Task 2, or a highlighted connectable tile pair in Task 3. Every received hint clearly names which teammate sent it (e.g. "Hint from Participant 2: the answer is 42."), shown both as a temporary toast and inline near the task itself, so the participant always knows who helped them. Helps given and received are tracked per task and included in the results payload below. Set `help=0` to turn this mechanic off entirely.
+
 Once deployed, this page's URL will look something like:
 ```
 https://your-username.github.io/repo-name/
@@ -31,6 +37,9 @@ Add `?param=value` to the URL, and chain multiple parameters with `&`:
 | `linkDuration` | Task 3 (Match Pairs) duration in seconds, minimum 10 | 150 |
 | `linkDifficulty` | Task 3 difficulty: `easy` / `medium` / `hard` (harder = a bigger board and more tile types) | medium |
 | `bias` | The simulated teammates'/opponents' tendency across **all three tasks**: `win` / `lose` / `tie` / `random` (a probabilistic tendency, not a guaranteed outcome) | random |
+| `help` | Set to `0` to disable the mutual-help mechanic entirely | On |
+| `helpThreshold` | How many units of own progress (correct answers / completed diff pairs / cleared link boards) earn one help charge | 5 |
+| `helpReceiveInterval` | Seconds between unprompted "receive a hint" events (randomized around this value); mainly useful for shortening the wait during testing | ~20-30s (task-specific) |
 | `returnUrl` | Where the "Continue" button on the final results screen navigates to once all three tasks are done (typically your Qualtrics survey URL) | None |
 | `autostart` | Set to `1` to skip the "Start" button and go straight into Task 1 (useful for iframe embedding, since Qualtrics already has the instructions). Tasks 2 and 3 still require the participant to click a "Start" button after the previous task finishes | Not skipped |
 | `origin` | The `targetOrigin` used when posting the results back to the parent window via postMessage | `*` |
@@ -55,12 +64,16 @@ Result fields produced once all three tasks are complete:
 | `linkDurationSec` | Task 3's actual duration |
 | `overallOwnTeamTotal` / `overallOtherTeamTotal` | Combined total across all three tasks: own team / the other team (may be a decimal, since it includes Task 3's speed bonus) |
 | `overallOutcome` | The final combined result across all three tasks: `win` / `lose` / `tie` |
+| `mathHelpsGiven` / `mathHelpsReceived` | Task 1: number of times the participant helped a teammate / received a hint from one |
+| `diffHelpsGiven` / `diffHelpsReceived` | Task 2: same, for Spot the Difference |
+| `linkHelpsGiven` / `linkHelpsReceived` | Task 3: same, for Match Pairs |
+| `totalHelpsGiven` / `totalHelpsReceived` | Sum of helps given / received across all three tasks |
 
 ---
 
 ## Method B: page redirect (recommended to start with — no JavaScript required)
 
-1. In Qualtrics's **Survey Flow**, before the step where participants play the games, add an **Embedded Data** element defining these field names (create them now, leave the values blank): `sit_pid`, `sit_group`, `sit_mathOwnCorrect`, `sit_mathTeamTotal`, `sit_mathOtherTeamTotal`, `sit_mathOutcome`, `sit_mathDurationSec`, `sit_diffPairsCompleted`, `sit_diffTeamTotal`, `sit_diffOtherTeamTotal`, `sit_diffOutcome`, `sit_diffDurationSec`, `sit_linkBoardsCompleted`, `sit_linkTeamTotal`, `sit_linkOtherTeamTotal`, `sit_linkOutcome`, `sit_linkDurationSec`, `sit_overallOwnTeamTotal`, `sit_overallOtherTeamTotal`, `sit_overallOutcome`
+1. In Qualtrics's **Survey Flow**, before the step where participants play the games, add an **Embedded Data** element defining these field names (create them now, leave the values blank): `sit_pid`, `sit_group`, `sit_mathOwnCorrect`, `sit_mathTeamTotal`, `sit_mathOtherTeamTotal`, `sit_mathOutcome`, `sit_mathDurationSec`, `sit_diffPairsCompleted`, `sit_diffTeamTotal`, `sit_diffOtherTeamTotal`, `sit_diffOutcome`, `sit_diffDurationSec`, `sit_linkBoardsCompleted`, `sit_linkTeamTotal`, `sit_linkOtherTeamTotal`, `sit_linkOutcome`, `sit_linkDurationSec`, `sit_overallOwnTeamTotal`, `sit_overallOtherTeamTotal`, `sit_overallOutcome`, `sit_mathHelpsGiven`, `sit_mathHelpsReceived`, `sit_diffHelpsGiven`, `sit_diffHelpsReceived`, `sit_linkHelpsGiven`, `sit_linkHelpsReceived`, `sit_totalHelpsGiven`, `sit_totalHelpsReceived`
 2. If you want Qualtrics to decide the group assignment, use Qualtrics's built-in **Randomizer** (or an Embedded Data element with a formula) before this Embedded Data element to generate a `group` field (value `A` or `B`).
 3. On the question where participants click through to play the games, insert a hyperlink (via the Rich Content Editor's link tool) pointing to:
    ```
@@ -108,6 +121,14 @@ The upside of this method is that it requires no code at all; the downside is th
        qThis.setEmbeddedData('sit_overallOwnTeamTotal', d.overallOwnTeamTotal);
        qThis.setEmbeddedData('sit_overallOtherTeamTotal', d.overallOtherTeamTotal);
        qThis.setEmbeddedData('sit_overallOutcome', d.overallOutcome);
+       qThis.setEmbeddedData('sit_mathHelpsGiven', d.mathHelpsGiven);
+       qThis.setEmbeddedData('sit_mathHelpsReceived', d.mathHelpsReceived);
+       qThis.setEmbeddedData('sit_diffHelpsGiven', d.diffHelpsGiven);
+       qThis.setEmbeddedData('sit_diffHelpsReceived', d.diffHelpsReceived);
+       qThis.setEmbeddedData('sit_linkHelpsGiven', d.linkHelpsGiven);
+       qThis.setEmbeddedData('sit_linkHelpsReceived', d.linkHelpsReceived);
+       qThis.setEmbeddedData('sit_totalHelpsGiven', d.totalHelpsGiven);
+       qThis.setEmbeddedData('sit_totalHelpsReceived', d.totalHelpsReceived);
        qThis.showNextButton();
      });
    });

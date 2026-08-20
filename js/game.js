@@ -36,6 +36,20 @@
   //   bias           'win' | 'lose' | 'tie' | 'random' — probabilistic
   //                  tendency for the participant's own team across ALL
   //                  THREE tasks, not a hard guarantee (default 'random')
+  //   help           '0' disables the mutual-help mechanic; anything else
+  //                  (default) leaves it on. When on, every helpThreshold
+  //                  units of the participant's own progress in a task
+  //                  (correct answers / completed diff pairs / cleared
+  //                  link boards) earns a "help charge" that can be spent
+  //                  on any chosen in-group teammate, and teammates
+  //                  periodically send the participant an unprompted hint
+  //                  in return (with their identity always shown).
+  //   helpThreshold  how many units of own progress earn one help charge
+  //                  (default 5)
+  //   helpReceiveInterval  seconds between unprompted "receive help"
+  //                  events (roughly randomized around this value); mainly
+  //                  useful for shortening the wait in automated tests.
+  //                  Default: task-specific (~20-30s)
   //   returnUrl      if set, a "continue" button on the final results screen
   //                  appends result fields (prefixed sit_) to this URL as
   //                  query params and navigates there
@@ -89,6 +103,9 @@
     linkDurationSec: clampInt(qs.get('linkDuration'), 150, 10, 1800),
     linkDifficulty: ['easy', 'medium', 'hard'].includes(qs.get('linkDifficulty')) ? qs.get('linkDifficulty') : 'medium',
     bias: ['win', 'lose', 'tie', 'random'].includes(qs.get('bias')) ? qs.get('bias') : 'random',
+    helpEnabled: qs.get('help') !== '0',
+    helpThreshold: clampInt(qs.get('helpThreshold'), 5, 1, 100),
+    helpReceiveIntervalSec: qs.get('helpReceiveInterval') ? clampInt(qs.get('helpReceiveInterval'), 0, 3, 600) : 0,
     returnUrl: qs.get('returnUrl') || '',
     targetOrigin: qs.get('origin') || '*',
     autostart: qs.get('autostart') === '1',
@@ -194,6 +211,16 @@
   // +0; slower than par earns +0 (never negative).
   const LINK_BONUS_WEIGHT = 1;
 
+  // Roughly how many real seconds pass between one in-group teammate
+  // spontaneously sending the participant a hint, per task (randomized
+  // +/-40% around this so it doesn't feel mechanical). Overridable via the
+  // helpReceiveInterval URL param, mainly for automated testing.
+  const HELP_RECEIVE_INTERVAL_SEC = { math: 22, diff: 28, link: 32 };
+
+  function freshHelpState() {
+    return { helpCharges: 0, helpChargesEarnedTotal: 0, helpsGiven: 0, helpsReceived: 0, helpFeed: [], activeHint: null, helpReceiveHandle: null };
+  }
+
   // ---------------------------------------------------------------------
   // Shared state
   // ---------------------------------------------------------------------
@@ -204,11 +231,183 @@
     group: built.realGroup,
     label: built.realLabel,
     phase: 'intro', // intro | math | math_done | diff | diff_done | link | results
-    math: { schedule: null, correctCount: 0, currentProblem: null, lastAnswerResult: null, startAt: null, endAt: null, teams: { A: [], B: [] }, totals: { A: 0, B: 0 } },
-    diff: { schedule: null, pairsCompleted: 0, round: null, foundInRound: 0, startAt: null, endAt: null, teams: { A: [], B: [] }, totals: { A: 0, B: 0 } },
-    link: { schedule: null, board: null, boardsCompleted: 0, selected: null, completionTimestamps: [], startAt: null, endAt: null, teams: { A: [], B: [] }, totals: { A: 0, B: 0 } },
+    math: Object.assign({ schedule: null, correctCount: 0, currentProblem: null, lastAnswerResult: null, startAt: null, endAt: null, teams: { A: [], B: [] }, totals: { A: 0, B: 0 } }, freshHelpState()),
+    diff: Object.assign({ schedule: null, pairsCompleted: 0, round: null, foundInRound: 0, startAt: null, endAt: null, teams: { A: [], B: [] }, totals: { A: 0, B: 0 }, hintDiffIndex: null }, freshHelpState()),
+    link: Object.assign({ schedule: null, board: null, boardsCompleted: 0, selected: null, completionTimestamps: [], startAt: null, endAt: null, teams: { A: [], B: [] }, totals: { A: 0, B: 0 }, hintPair: null }, freshHelpState()),
   };
-  if (CONFIG.debug) window.__sitDebug = { get state() { return S; }, CONFIG };
+
+  // A small fixed toast that lives outside #app so it survives full-screen
+  // re-renders when a phase changes; used to surface "who just helped you"
+  // even if the participant isn't looking at the help panel right now.
+  const helpToastEl = document.createElement('div');
+  helpToastEl.id = 'help-toast';
+  helpToastEl.className = 'help-toast';
+  document.body.appendChild(helpToastEl);
+  let helpToastTimer = null;
+  function showHelpToast(text) {
+    helpToastEl.textContent = text;
+    helpToastEl.classList.remove('show');
+    void helpToastEl.offsetWidth;
+    helpToastEl.classList.add('show');
+    if (helpToastTimer) clearTimeout(helpToastTimer);
+    helpToastTimer = setTimeout(() => helpToastEl.classList.remove('show'), 4000);
+  }
+
+  // =======================================================================
+  // Mutual help mechanic (shared across all three tasks)
+  // =======================================================================
+  function ingroupBots() {
+    return S.roster.filter((p) => !p.isReal && p.groupLabel === S.group);
+  }
+  function taskProgressCount(taskKey) {
+    if (taskKey === 'math') return S.math.correctCount;
+    if (taskKey === 'diff') return S.diff.pairsCompleted;
+    return S.link.boardsCompleted;
+  }
+  function pushHelpFeed(taskKey, text) {
+    const t = S[taskKey];
+    t.helpFeed.push(text);
+    if (t.helpFeed.length > 6) t.helpFeed.shift();
+  }
+
+  // Call after any own-progress increment in a task; grants one help charge
+  // for every helpThreshold units of progress reached.
+  function maybeGrantHelpCharge(taskKey) {
+    if (!CONFIG.helpEnabled) return;
+    const t = S[taskKey];
+    const earnedNow = Math.floor(taskProgressCount(taskKey) / CONFIG.helpThreshold);
+    if (earnedNow > t.helpChargesEarnedTotal) {
+      t.helpCharges += earnedNow - t.helpChargesEarnedTotal;
+      t.helpChargesEarnedTotal = earnedNow;
+    }
+  }
+
+  // The participant spends one charge to give a chosen in-group teammate a
+  // point "on the house" — implemented by injecting a synthetic completion
+  // timestamp into that bot's own schedule, so it flows through the exact
+  // same scoreboard/results math as a normally-earned point.
+  function giveHelp(taskKey, targetBotId) {
+    const t = S[taskKey];
+    if (!CONFIG.helpEnabled || S.phase !== taskKey || t.helpCharges <= 0) return;
+    const bot = S.roster.find((p) => p.id === targetBotId && !p.isReal && p.groupLabel === S.group);
+    if (!bot || !t.schedule) return;
+    const elapsedMs = Math.max(0, Math.min(Date.now(), t.endAt) - t.startAt);
+    (t.schedule[bot.id] = t.schedule[bot.id] || []).push(elapsedMs);
+    t.schedule[bot.id].sort((a, b) => a - b);
+    t.helpCharges--;
+    t.helpsGiven++;
+    pushHelpFeed(taskKey, `You gave Participant ${bot.label} a hint.`);
+    showHelpToast(`You helped Participant ${bot.label}!`);
+    refreshTaskScoreboardImmediate(taskKey);
+    refreshHelpPanel(taskKey);
+  }
+
+  function refreshTaskScoreboardImmediate(taskKey) {
+    if (taskKey === 'math') return updateMathScoreboardDomImmediate();
+    if (taskKey === 'diff') return updateDiffScoreboardDomImmediate();
+    return updateLinkScoreboardDomImmediate();
+  }
+
+  function scheduleHelpReceive(taskKey) {
+    if (!CONFIG.helpEnabled) return;
+    const t = S[taskKey];
+    const base = CONFIG.helpReceiveIntervalSec || HELP_RECEIVE_INTERVAL_SEC[taskKey];
+    const delay = Math.max(2, base * (0.6 + Math.random() * 0.8)) * 1000;
+    t.helpReceiveHandle = setTimeout(() => triggerHelpReceive(taskKey), delay);
+  }
+
+  function triggerHelpReceive(taskKey) {
+    if (S.phase !== taskKey) return; // task already ended — stop the chain
+    const bots = ingroupBots();
+    if (bots.length === 0) { scheduleHelpReceive(taskKey); return; }
+    const helper = bots[randInt(0, bots.length - 1)];
+    const applied = applyReceivedHint(taskKey, helper);
+    if (applied) {
+      const t = S[taskKey];
+      t.helpsReceived++;
+      pushHelpFeed(taskKey, `Participant ${helper.label} gave you a hint!`);
+      showHelpToast(`Participant ${helper.label} gave you a hint!`);
+      refreshHelpPanel(taskKey);
+    }
+    scheduleHelpReceive(taskKey);
+  }
+
+  // Applies a task-specific hint and sets t.activeHint (always naming the
+  // helper, so the participant can always see who helped them). Returns
+  // false if there was nothing useful to hint at right now.
+  function applyReceivedHint(taskKey, helper) {
+    if (taskKey === 'math') {
+      const m = S.math;
+      if (!m.currentProblem) return false;
+      m.activeHint = `Hint from Participant ${helper.label}: the answer is ${m.currentProblem.answer}.`;
+      updateMathHintDom();
+      return true;
+    }
+    if (taskKey === 'diff') {
+      const d = S.diff;
+      if (!d.round) return false;
+      const unfoundIdx = d.round.diffs.reduce((acc, dd, idx) => { if (!dd.found) acc.push(idx); return acc; }, []);
+      if (unfoundIdx.length === 0) return false;
+      d.hintDiffIndex = unfoundIdx[randInt(0, unfoundIdx.length - 1)];
+      d.activeHint = `Hint from Participant ${helper.label}: check the highlighted spot.`;
+      drawDiffCanvases();
+      updateDiffHintDom();
+      return true;
+    }
+    // link
+    const l = S.link;
+    if (!l.board) return false;
+    const pair = LinkMatch.findValidPair(l.board);
+    if (!pair) return false;
+    l.hintPair = pair;
+    l.activeHint = `Hint from Participant ${helper.label}: try the highlighted tiles.`;
+    renderLinkBoardDom();
+    updateLinkHintDom();
+    return true;
+  }
+
+  function renderHelpPanelHtml(taskKey) {
+    if (!CONFIG.helpEnabled) return '';
+    const t = S[taskKey];
+    const bots = ingroupBots();
+    let statusHtml;
+    if (t.helpCharges > 0 && bots.length > 0) {
+      statusHtml = `
+        <div class="help-status">You have <strong>${t.helpCharges}</strong> help ${t.helpCharges === 1 ? 'charge' : 'charges'} — choose a teammate to help:</div>
+        <div class="help-target-list">
+          ${bots.map((b) => `<button type="button" class="help-target-btn" data-help-target="${esc(b.id)}">Help Participant ${esc(b.label)}</button>`).join('')}
+        </div>`;
+    } else {
+      const remaining = CONFIG.helpThreshold - (taskProgressCount(taskKey) % CONFIG.helpThreshold);
+      statusHtml = `<div class="help-status muted">Complete ${remaining} more to earn a chance to help a teammate.</div>`;
+    }
+    const feedHtml = t.helpFeed.length
+      ? `<ul class="help-feed">${t.helpFeed.slice().reverse().map((f) => `<li>${esc(f)}</li>`).join('')}</ul>`
+      : '';
+    return `<div class="card help-panel" id="help-panel-${taskKey}">
+        <h2>Mutual Help</h2>
+        ${statusHtml}
+        <div class="muted" style="font-size:0.82rem; margin-top:8px;">Helped teammates: ${t.helpsGiven} · Hints received: ${t.helpsReceived}</div>
+        ${feedHtml}
+      </div>`;
+  }
+
+  function attachHelpPanelListeners(taskKey) {
+    const panel = document.getElementById('help-panel-' + taskKey);
+    if (!panel) return;
+    panel.querySelectorAll('.help-target-btn').forEach((btn) => {
+      btn.addEventListener('click', () => giveHelp(taskKey, btn.dataset.helpTarget));
+    });
+  }
+
+  function refreshHelpPanel(taskKey) {
+    const el = document.getElementById('help-panel-' + taskKey);
+    if (!el) return;
+    el.outerHTML = renderHelpPanelHtml(taskKey);
+    attachHelpPanelListeners(taskKey);
+  }
+
+  if (CONFIG.debug) window.__sitDebug = { get state() { return S; }, CONFIG, giveHelp, triggerHelpReceive };
 
   function render() {
     if (S.phase === 'intro') return renderIntro();
@@ -260,6 +459,7 @@
     render();
     mathTick();
     requestProblem();
+    scheduleHelpReceive('math');
   }
 
   let mathTickHandle = null;
@@ -274,6 +474,7 @@
       updateMathTimerDom();
       if (Date.now() >= m.endAt) {
         clearInterval(mathTickHandle);
+        if (m.helpReceiveHandle) clearTimeout(m.helpReceiveHandle);
         S.phase = 'math_done';
         render();
       }
@@ -285,7 +486,9 @@
     if (S.phase !== 'math') return;
     m.currentProblem = generateProblem(CONFIG.difficulty);
     m.lastAnswerResult = null;
+    m.activeHint = null;
     updateProblemDom();
+    updateMathHintDom();
     const inp = document.getElementById('answer-input');
     if (inp) { inp.value = ''; inp.focus(); }
   }
@@ -294,7 +497,11 @@
     const m = S.math;
     if (!m.currentProblem || S.phase !== 'math') return;
     const isCorrect = Number(value) === m.currentProblem.answer;
-    if (isCorrect) m.correctCount++;
+    if (isCorrect) {
+      m.correctCount++;
+      maybeGrantHelpCharge('math');
+      refreshHelpPanel('math');
+    }
     m.lastAnswerResult = isCorrect ? 'correct' : 'wrong';
     updateProblemDom();
     setTimeout(requestProblem, 150);
@@ -309,17 +516,20 @@
         <div class="problem-box" id="problem-box">
           <div class="problem-text">${m.currentProblem ? esc(m.currentProblem.text) + ' = ?' : '…'}</div>
           <input type="number" id="answer-input" placeholder="Type your answer and press Enter" autocomplete="off" style="max-width:200px; margin:0 auto; text-align:center; font-size:1.2rem;" />
+          <div class="hint-text" id="math-hint">${m.activeHint ? esc(m.activeHint) : ''}</div>
         </div>
       </div>
       <div class="card">
         <h2>Live Scoreboard</h2>
         <div id="scoreboard-slot">${renderScoreboardHtml(m.teams, m.totals)}</div>
-      </div>`;
+      </div>
+      ${renderHelpPanelHtml('math')}`;
     const inp = document.getElementById('answer-input');
     if (inp) {
       inp.addEventListener('keydown', (e) => { if (e.key === 'Enter' && inp.value !== '') submitAnswer(inp.value); });
       inp.focus();
     }
+    attachHelpPanelListeners('math');
   }
 
   function updateMathTimerDom() {
@@ -329,6 +539,17 @@
   function updateMathScoreboardDom() {
     const el = document.getElementById('scoreboard-slot');
     if (el) el.innerHTML = renderScoreboardHtml(S.math.teams, S.math.totals);
+  }
+  function updateMathScoreboardDomImmediate() {
+    const m = S.math;
+    const elapsedMs = Math.max(0, Math.min(Date.now(), m.endAt) - m.startAt);
+    const { teams, totals } = computeScoreboard(S.roster, m.schedule, S.group, m.correctCount, elapsedMs);
+    m.teams = teams; m.totals = totals;
+    updateMathScoreboardDom();
+  }
+  function updateMathHintDom() {
+    const el = document.getElementById('math-hint');
+    if (el) el.textContent = S.math.activeHint || '';
   }
   function updateProblemDom() {
     const box = document.getElementById('problem-box');
@@ -386,6 +607,7 @@
     render();
     diffTick();
     nextDiffRound();
+    scheduleHelpReceive('diff');
   }
 
   let diffTickHandle = null;
@@ -400,6 +622,7 @@
       updateDiffTimerDom();
       if (Date.now() >= d.endAt) {
         clearInterval(diffTickHandle);
+        if (d.helpReceiveHandle) clearTimeout(d.helpReceiveHandle);
         S.phase = 'diff_done';
         render();
       }
@@ -411,16 +634,19 @@
     if (S.phase !== 'diff') return;
     d.round = SpotDiff.generateRound(DIFF_CANVAS_W, DIFF_CANVAS_H, CONFIG.diffDifficulty);
     d.foundInRound = 0;
+    d.hintDiffIndex = null;
+    d.activeHint = null;
     drawDiffCanvases();
     updateDiffProgressDom();
+    updateDiffHintDom();
   }
 
   function drawDiffCanvases() {
     const d = S.diff;
     const canvasA = document.getElementById('diff-canvas-a');
     const canvasB = document.getElementById('diff-canvas-b');
-    if (canvasA) SpotDiff.render(canvasA, d.round.shapesA, d.round, 'A');
-    if (canvasB) SpotDiff.render(canvasB, d.round.shapesB, d.round, 'B');
+    if (canvasA) SpotDiff.render(canvasA, d.round.shapesA, d.round, 'A', d.hintDiffIndex);
+    if (canvasB) SpotDiff.render(canvasB, d.round.shapesB, d.round, 'B', d.hintDiffIndex);
   }
 
   function handleDiffClick(side, evt) {
@@ -434,10 +660,17 @@
     if (!hit) return;
     hit.found = true;
     d.foundInRound++;
+    if (d.hintDiffIndex !== null && d.round.diffs[d.hintDiffIndex] === hit) {
+      d.hintDiffIndex = null;
+      d.activeHint = null;
+      updateDiffHintDom();
+    }
     drawDiffCanvases();
     updateDiffProgressDom();
     if (d.foundInRound >= d.round.diffs.length) {
       d.pairsCompleted++;
+      maybeGrantHelpCharge('diff');
+      refreshHelpPanel('diff');
       updateDiffScoreboardDomImmediate();
       setTimeout(nextDiffRound, 550);
     }
@@ -463,16 +696,19 @@
           <canvas id="diff-canvas-b" width="${DIFF_CANVAS_W}" height="${DIFF_CANVAS_H}" style="border-radius:8px; cursor:crosshair;"></canvas>
         </div>
         <p class="center muted mt" style="font-size:0.85rem;">Completed <span id="diff-completed">${d.pairsCompleted}</span> pair(s)</p>
+        <div class="hint-text center" id="diff-hint">${d.activeHint ? esc(d.activeHint) : ''}</div>
       </div>
       <div class="card">
         <h2>Live Scoreboard (Pairs Completed)</h2>
         <div id="scoreboard-slot">${renderScoreboardHtml(d.teams, d.totals)}</div>
-      </div>`;
+      </div>
+      ${renderHelpPanelHtml('diff')}`;
     const canvasA = document.getElementById('diff-canvas-a');
     const canvasB = document.getElementById('diff-canvas-b');
     canvasA.addEventListener('click', (e) => handleDiffClick('A', e));
     canvasB.addEventListener('click', (e) => handleDiffClick('B', e));
     if (d.round) drawDiffCanvases();
+    attachHelpPanelListeners('diff');
   }
 
   function updateDiffTimerDom() {
@@ -489,6 +725,10 @@
     if (p) p.textContent = d.round ? `Found ${d.foundInRound} / ${d.round.diffs.length} difference(s) this round` : '';
     const c = document.getElementById('diff-completed');
     if (c) c.textContent = d.pairsCompleted;
+  }
+  function updateDiffHintDom() {
+    const el = document.getElementById('diff-hint');
+    if (el) el.textContent = S.diff.activeHint || '';
   }
 
   function renderDiffDone() {
@@ -518,6 +758,7 @@
     render();
     linkTick();
     nextLinkRound();
+    scheduleHelpReceive('link');
   }
 
   let linkTickHandle = null;
@@ -532,6 +773,7 @@
       updateLinkTimerDom();
       if (Date.now() >= l.endAt) {
         clearInterval(linkTickHandle);
+        if (l.helpReceiveHandle) clearTimeout(l.helpReceiveHandle);
         S.phase = 'results';
         render();
         reportCompletion();
@@ -544,8 +786,11 @@
     if (S.phase !== 'link') return;
     l.board = LinkMatch.generateBoard(CONFIG.linkDifficulty);
     l.selected = null;
+    l.hintPair = null;
+    l.activeHint = null;
     renderLinkBoardDom();
     updateLinkProgressDom();
+    updateLinkHintDom();
   }
 
   function remainingCount(board) { return board.cells.filter((v) => v !== null).length; }
@@ -569,18 +814,29 @@
     const sameSymbol = l.board.cells[l.selected] === l.board.cells[idx];
     const connects = sameSymbol && LinkMatch.canConnect(l.board, a.r, a.c, b.r, b.c);
     if (connects) {
+      const clearedA = l.selected, clearedB = idx;
       l.board.cells[l.selected] = null;
       l.board.cells[idx] = null;
       l.selected = null;
+      if (l.hintPair && (l.hintPair.includes(clearedA) || l.hintPair.includes(clearedB))) {
+        l.hintPair = null;
+        l.activeHint = null;
+        updateLinkHintDom();
+      }
       if (remainingCount(l.board) === 0) {
         l.boardsCompleted++;
         l.completionTimestamps.push(Date.now() - l.startAt);
+        maybeGrantHelpCharge('link');
+        refreshHelpPanel('link');
         updateLinkScoreboardDomImmediate();
         setTimeout(nextLinkRound, 450);
         return;
       }
       if (!LinkMatch.hasAnyValidMove(l.board)) {
         LinkMatch.reshuffleUntilSolvable(l.board);
+        l.hintPair = null;
+        l.activeHint = null;
+        updateLinkHintDom();
       }
       renderLinkBoardDom();
       updateLinkProgressDom();
@@ -608,12 +864,15 @@
         <p class="center muted" id="link-progress">Click two matching tiles to try</p>
         <div id="link-grid-slot"></div>
         <p class="center muted mt" style="font-size:0.85rem;">Completed <span id="link-completed">${l.boardsCompleted}</span> round(s)</p>
+        <div class="hint-text center" id="link-hint">${l.activeHint ? esc(l.activeHint) : ''}</div>
       </div>
       <div class="card">
         <h2>Live Scoreboard (Rounds Completed)</h2>
         <div id="scoreboard-slot">${renderScoreboardHtml(l.teams, l.totals)}</div>
-      </div>`;
+      </div>
+      ${renderHelpPanelHtml('link')}`;
     if (l.board) renderLinkBoardDom();
+    attachHelpPanelListeners('link');
   }
 
   function renderLinkBoardDom() {
@@ -625,7 +884,8 @@
       ${cells.map((sym, idx) => {
         if (sym === null) return `<div class="link-tile empty" data-idx="${idx}"></div>`;
         const selectedCls = l.selected === idx ? ' selected' : '';
-        return `<button type="button" class="link-tile${selectedCls}" data-idx="${idx}">${esc(LinkMatch.SYMBOLS[sym % LinkMatch.SYMBOLS.length])}</button>`;
+        const hintCls = l.hintPair && l.hintPair.includes(idx) ? ' hint' : '';
+        return `<button type="button" class="link-tile${selectedCls}${hintCls}" data-idx="${idx}">${esc(LinkMatch.SYMBOLS[sym % LinkMatch.SYMBOLS.length])}</button>`;
       }).join('')}
     </div>`;
     slot.querySelectorAll('.link-tile:not(.empty)').forEach((el) => {
@@ -647,6 +907,10 @@
     if (p && l.board) p.textContent = `${remainingCount(l.board)} / ${l.board.cells.length} tile(s) remaining this round`;
     const c = document.getElementById('link-completed');
     if (c) c.textContent = l.boardsCompleted;
+  }
+  function updateLinkHintDom() {
+    const el = document.getElementById('link-hint');
+    if (el) el.textContent = S.link.activeHint || '';
   }
 
   // Combines each participant's base score (1 point per fully-cleared board)
@@ -727,6 +991,11 @@
       linkTeamTotal, linkOtherTeamTotal: linkOtherTotal, linkOutcome,
       linkDurationSec: CONFIG.linkDurationSec,
       overallOwnTeamTotal, overallOtherTeamTotal, overallOutcome,
+      mathHelpsGiven: m.helpsGiven, mathHelpsReceived: m.helpsReceived,
+      diffHelpsGiven: d.helpsGiven, diffHelpsReceived: d.helpsReceived,
+      linkHelpsGiven: l.helpsGiven, linkHelpsReceived: l.helpsReceived,
+      totalHelpsGiven: m.helpsGiven + d.helpsGiven + l.helpsGiven,
+      totalHelpsReceived: m.helpsReceived + d.helpsReceived + l.helpsReceived,
     };
   }
 
@@ -739,6 +1008,7 @@
         <p class="lead">Task 1 (Calculation): You answered ${payload.mathOwnCorrect} correctly. Your team ${payload.mathTeamTotal} : Other team ${payload.mathOtherTeamTotal} (${outcomeLabel[payload.mathOutcome]})</p>
         <p class="lead">Task 2 (Spot the Difference): You completed ${payload.diffPairsCompleted} pair(s). Your team ${payload.diffTeamTotal} : Other team ${payload.diffOtherTeamTotal} (${outcomeLabel[payload.diffOutcome]})</p>
         <p class="lead">Task 3 (Match Pairs): You cleared ${payload.linkBoardsCompleted} round(s). Your team ${payload.linkTeamTotal} : Other team ${payload.linkOtherTeamTotal} (${outcomeLabel[payload.linkOutcome]}, includes speed bonus)</p>
+        ${CONFIG.helpEnabled ? `<p class="lead">Mutual help: you helped teammates ${payload.totalHelpsGiven} time(s), and received ${payload.totalHelpsReceived} hint(s) from teammates.</p>` : ''}
         <div id="continue-slot" class="mt"></div>
       </div>`;
 

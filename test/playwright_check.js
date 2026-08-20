@@ -179,6 +179,64 @@ async function testStandalonePlay(browser) {
 }
 
 // -----------------------------------------------------------------------
+// 1b. Mutual-help mechanic: earning a charge, choosing a specific teammate
+//     to help, and receiving an attributed hint back. Uses the debug hook
+//     (giveHelp / triggerHelpReceive) to drive the "receive help" side
+//     deterministically instead of waiting on real timers.
+// -----------------------------------------------------------------------
+async function testMutualHelp(browser) {
+  const page = await browser.newPage();
+  const consoleErrors = [];
+  page.on('pageerror', (e) => consoleErrors.push(String(e)));
+  page.on('console', (msg) => { if (msg.type() === 'error') consoleErrors.push(msg.text()); });
+
+  await page.goto(`${BASE}/?pid=HELP_TEST&group=A&ingroup=3&outgroup=3&duration=25&difficulty=easy&diffDuration=25&diffDifficulty=easy&linkDuration=25&linkDifficulty=easy&bias=tie&helpThreshold=2&debug=1`);
+  await page.waitForSelector('h1');
+  await page.click('#start-btn');
+  await page.waitForSelector('#answer-input', { timeout: 3000 });
+
+  // Answer correctly until helpThreshold (2) is reached and a charge appears.
+  const gotCharge = await answerMathUntil(page, async () => {
+    const charges = await page.evaluate(() => window.__sitDebug.state.math.helpCharges);
+    return charges >= 1;
+  }, 10000);
+  assert(gotCharge, 'answering helpThreshold correct problems grants a help charge');
+  const chargesAfterTwo = await page.evaluate(() => window.__sitDebug.state.math.helpCharges);
+  assert(chargesAfterTwo >= 1, `math.helpCharges is at least 1 once earned (got ${chargesAfterTwo})`);
+
+  // The help panel should let the participant pick WHICH teammate to help
+  // (not auto-select a target).
+  const helpBtnCount = await page.locator('.help-target-btn').count();
+  assert(helpBtnCount >= 1, `help panel lists at least one specific teammate to choose to help (got ${helpBtnCount})`);
+
+  const targetBotId = await page.evaluate(() => document.querySelector('.help-target-btn').dataset.helpTarget);
+  const botScheduleBefore = await page.evaluate((id) => (window.__sitDebug.state.math.schedule[id] || []).length, targetBotId);
+  await page.locator('.help-target-btn').first().click();
+  await sleep(150);
+  const botScheduleAfter = await page.evaluate((id) => (window.__sitDebug.state.math.schedule[id] || []).length, targetBotId);
+  assert(botScheduleAfter === botScheduleBefore + 1, `choosing a teammate to help injects a synthetic point into exactly that teammate's schedule (before ${botScheduleBefore}, after ${botScheduleAfter})`);
+
+  const helpsGivenAfter = await page.evaluate(() => window.__sitDebug.state.math.helpsGiven);
+  assert(helpsGivenAfter === 1, `helpsGiven is recorded after giving help (got ${helpsGivenAfter})`);
+  const chargesAfterGive = await page.evaluate(() => window.__sitDebug.state.math.helpCharges);
+  assert(chargesAfterGive === chargesAfterTwo - 1, `the spent help charge is deducted (before ${chargesAfterTwo}, after ${chargesAfterGive})`);
+
+  // Simulate a teammate spontaneously sending a hint back (deterministic via
+  // the debug hook rather than waiting out the real ~20-30s interval).
+  await page.evaluate(() => window.__sitDebug.triggerHelpReceive('math'));
+  await sleep(100);
+  const hintState = await page.evaluate(() => ({ activeHint: window.__sitDebug.state.math.activeHint, helpsReceived: window.__sitDebug.state.math.helpsReceived }));
+  assert(hintState.helpsReceived === 1, `helpsReceived is recorded after a teammate sends a hint (got ${hintState.helpsReceived})`);
+  assert(!!hintState.activeHint && /Participant \d+/.test(hintState.activeHint), `the received hint names the specific teammate who gave it (got "${hintState.activeHint}")`);
+
+  const hintTextOnPage = await page.locator('#math-hint').textContent();
+  assert(hintTextOnPage.includes('Participant'), `the helper's identity is visibly rendered to the participant, not just tracked internally (got "${hintTextOnPage}")`);
+
+  assert(consoleErrors.length === 0, `no JS console errors during the mutual-help flow (got: ${JSON.stringify(consoleErrors)})`);
+  await page.close();
+}
+
+// -----------------------------------------------------------------------
 // 2. iframe + postMessage integration path (fully bot-driven — no manual
 //    diff clicking — to verify the automatic hand-off and payload shape).
 // -----------------------------------------------------------------------
@@ -211,7 +269,7 @@ async function testPostMessageIframe(browser) {
   if (received) {
     assert(received.pid === 'IFRAME_TEST', `payload echoes pid correctly (got "${received.pid}")`);
     assert(received.group === 'B', `payload echoes the externally-forced group B (got "${received.group}")`);
-    const numericFields = ['mathOwnCorrect', 'mathTeamTotal', 'mathOtherTeamTotal', 'diffPairsCompleted', 'diffTeamTotal', 'diffOtherTeamTotal', 'linkBoardsCompleted', 'linkTeamTotal', 'linkOtherTeamTotal', 'overallOwnTeamTotal', 'overallOtherTeamTotal'];
+    const numericFields = ['mathOwnCorrect', 'mathTeamTotal', 'mathOtherTeamTotal', 'diffPairsCompleted', 'diffTeamTotal', 'diffOtherTeamTotal', 'linkBoardsCompleted', 'linkTeamTotal', 'linkOtherTeamTotal', 'overallOwnTeamTotal', 'overallOtherTeamTotal', 'mathHelpsGiven', 'mathHelpsReceived', 'diffHelpsGiven', 'diffHelpsReceived', 'linkHelpsGiven', 'linkHelpsReceived', 'totalHelpsGiven', 'totalHelpsReceived'];
     const allNumeric = numericFields.every((k) => typeof received[k] === 'number');
     assert(allNumeric, `payload includes all numeric fields for all three tasks (got ${JSON.stringify(received)})`);
     const outcomeFields = ['mathOutcome', 'diffOutcome', 'linkOutcome', 'overallOutcome'];
@@ -256,6 +314,7 @@ async function main() {
   const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' });
   try {
     await testStandalonePlay(browser);
+    await testMutualHelp(browser);
     await testPostMessageIframe(browser);
     await testReturnUrlRedirect(browser);
   } finally {
