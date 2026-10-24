@@ -4,6 +4,24 @@
 // tile-pair-matching (连连看) task -> results.
 process.env.PLAYWRIGHT_BROWSERS_PATH = process.env.PLAYWRIGHT_BROWSERS_PATH || '/opt/pw-browsers';
 const { chromium } = require('/home/claude/.npm-global/lib/node_modules/playwright');
+const fs = require('fs');
+const path = require('path');
+
+// Resolve the pre-installed Chromium executable by globbing rather than a
+// hardcoded version/folder name, since both change as the sandbox image is
+// updated (e.g. chromium-1194/chrome-linux -> chromium-1243/chrome-linux64).
+function resolveChromiumExecutable() {
+  const root = process.env.PLAYWRIGHT_BROWSERS_PATH;
+  const chromiumDirs = fs.readdirSync(root).filter((d) => d.startsWith('chromium-') && !d.startsWith('chromium_headless_shell'));
+  for (const dir of chromiumDirs) {
+    const base = path.join(root, dir);
+    for (const sub of fs.readdirSync(base)) {
+      const candidate = path.join(base, sub, 'chrome');
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
+  throw new Error(`Could not find a chrome executable under ${root}`);
+}
 
 const BASE = 'http://localhost:8099';
 let failures = 0;
@@ -90,7 +108,7 @@ async function testStandalonePlay(browser) {
   page.on('pageerror', (e) => consoleErrors.push(String(e)));
   page.on('console', (msg) => { if (msg.type() === 'error') consoleErrors.push(msg.text()); });
 
-  await page.goto(`${BASE}/?pid=TESTP1&group=A&ingroup=3&outgroup=3&duration=6&difficulty=easy&diffDuration=15&diffDifficulty=easy&linkDuration=25&linkDifficulty=easy&bias=win&debug=1`);
+  await page.goto(`${BASE}/game.html?pid=TESTP1&group=A&ingroup=3&outgroup=3&duration=6&difficulty=easy&diffDuration=15&diffDifficulty=easy&linkDuration=25&linkDifficulty=easy&bias=win&debug=1`);
   await page.waitForSelector('h1');
   assert(await h1Includes(page, 'Group A'), 'intro screen shows the externally-forced group (Group A)');
 
@@ -190,7 +208,7 @@ async function testMutualHelp(browser) {
   page.on('pageerror', (e) => consoleErrors.push(String(e)));
   page.on('console', (msg) => { if (msg.type() === 'error') consoleErrors.push(msg.text()); });
 
-  await page.goto(`${BASE}/?pid=HELP_TEST&group=A&ingroup=3&outgroup=3&duration=25&difficulty=easy&diffDuration=25&diffDifficulty=easy&linkDuration=25&linkDifficulty=easy&bias=tie&helpThreshold=2&debug=1`);
+  await page.goto(`${BASE}/game.html?pid=HELP_TEST&group=A&ingroup=3&outgroup=3&duration=25&difficulty=easy&diffDuration=25&diffDifficulty=easy&linkDuration=25&linkDifficulty=easy&bias=tie&helpThreshold=2&debug=1`);
   await page.waitForSelector('h1');
   await page.click('#start-btn');
   await page.waitForSelector('#answer-input', { timeout: 3000 });
@@ -244,7 +262,7 @@ async function testPostMessageIframe(browser) {
   const page = await browser.newPage();
   await page.setContent(`
     <html><body>
-      <iframe id="f" name="sitFrame" src="${BASE}/?pid=IFRAME_TEST&group=B&ingroup=1&outgroup=1&duration=3&difficulty=easy&diffDuration=3&diffDifficulty=easy&linkDuration=10&linkDifficulty=easy&autostart=1" width="500" height="700"></iframe>
+      <iframe id="f" name="sitFrame" src="${BASE}/game.html?pid=IFRAME_TEST&group=B&ingroup=1&outgroup=1&duration=3&difficulty=easy&diffDuration=3&diffDifficulty=easy&linkDuration=10&linkDifficulty=easy&autostart=1" width="500" height="700"></iframe>
       <script>
         window.__received = null;
         window.addEventListener('message', (ev) => {
@@ -284,8 +302,8 @@ async function testPostMessageIframe(browser) {
 // -----------------------------------------------------------------------
 async function testReturnUrlRedirect(browser) {
   const page = await browser.newPage();
-  const returnUrl = 'http://localhost:8099/index.html'; // reuse the static server as a stand-in "Qualtrics" target
-  await page.goto(`${BASE}/?pid=REDIR_TEST&group=A&ingroup=1&outgroup=1&duration=3&difficulty=easy&diffDuration=3&diffDifficulty=easy&linkDuration=10&linkDifficulty=easy&autostart=1&returnUrl=${encodeURIComponent(returnUrl)}`);
+  const returnUrl = 'http://localhost:8099/game.html'; // reuse the static server as a stand-in "Qualtrics" target
+  await page.goto(`${BASE}/game.html?pid=REDIR_TEST&group=A&ingroup=1&outgroup=1&duration=3&difficulty=easy&diffDuration=3&diffDifficulty=easy&linkDuration=10&linkDifficulty=easy&autostart=1&returnUrl=${encodeURIComponent(returnUrl)}`);
 
   const mathDone = await answerMathUntil(page, () => h1Includes(page, 'Task 1 Complete'), 10000);
   assert(mathDone, 'returnUrl flow: math task completes');
@@ -301,7 +319,7 @@ async function testReturnUrlRedirect(browser) {
   await page.click('button:has-text("Continue")');
   await page.waitForLoadState('load');
   const finalUrl = new URL(page.url());
-  assert(finalUrl.pathname === '/index.html', `clicking continue navigated to the configured returnUrl (got ${page.url()})`);
+  assert(finalUrl.pathname === '/game.html', `clicking continue navigated to the configured returnUrl (got ${page.url()})`);
   assert(finalUrl.searchParams.get('sit_pid') === 'REDIR_TEST', 'returnUrl carries sit_pid query param');
   assert(finalUrl.searchParams.has('sit_mathOutcome'), 'returnUrl carries sit_mathOutcome query param');
   assert(finalUrl.searchParams.has('sit_diffPairsCompleted'), 'returnUrl carries sit_diffPairsCompleted query param');
@@ -310,13 +328,221 @@ async function testReturnUrlRedirect(browser) {
   await page.close();
 }
 
+// -----------------------------------------------------------------------
+// 4. Full study-flow tests (index.html): Entry -> Demographics -> Random
+//    Assignment -> Condition 1/2/3 -> shared Outcome Measures -> Debrief.
+//    Condition 2 embeds game.html via iframe; Conditions 1/3 are pure
+//    survey screens using the exact wording from the KU POLS proposal.
+// -----------------------------------------------------------------------
+async function fillEntryAndContinue(page) {
+  await page.waitForSelector('#entry-continue-btn', { timeout: 5000 });
+  await page.check('#chk-adult');
+  await page.check('#chk-us');
+  await page.check('#chk-agree');
+  await page.click('#entry-continue-btn');
+}
+
+async function fillDemographicsAndContinue(page) {
+  await page.waitForSelector('#demo-continue-btn', { timeout: 5000 });
+  const groups = await page.locator('.radio-group[data-demo-id]').all();
+  for (const g of groups) {
+    await g.locator('input[type="radio"]').first().check();
+  }
+  await page.click('#demo-continue-btn');
+}
+
+async function fillAllocations(page, perPersonValue) {
+  const labels = await page.evaluate(() => window.__studyDebug.state.roster.map((p) => p.label));
+  for (const label of labels) {
+    await page.locator(`input[name="alloc-${label}"][value="${perPersonValue}"]`).check();
+  }
+}
+
+async function selectCorrectComprehension(page, mode) {
+  const comp = mode === 'fixed10'
+    ? [['q5', 'Fixed at 10 coins'], ['q6', 'Cannot exceed 10 coins'], ['q7', 'May require reducing gold coins allocated to others'], ['q8', 'Since the total is limited, trade-offs between participants may be needed']]
+    : [['q5', 'Unlimited'], ['q6', 'The gold coins other participants receive will not be affected']];
+  for (const [id, val] of comp) {
+    await page.locator(`input[name="comp-${id}"][value="${val}"]`).check();
+  }
+}
+
+async function setAffectSliders(page, value) {
+  await page.evaluate((v) => {
+    ['identification', 'ingroupAffect', 'outgroupAffect'].forEach((id) => {
+      const el = document.getElementById(id);
+      el.value = String(v);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }, value);
+}
+
+async function testFullFlowCondition1(browser) {
+  const page = await browser.newPage();
+  const consoleErrors = [];
+  page.on('pageerror', (e) => consoleErrors.push(String(e)));
+  page.on('console', (msg) => { if (msg.type() === 'error') consoleErrors.push(msg.text()); });
+
+  await page.goto(`${BASE}/?pid=FLOW_C1&condition=1&group=A&ingroup=4&outgroup=5&debug=1`);
+  await fillEntryAndContinue(page);
+  await fillDemographicsAndContinue(page);
+
+  const reachedIntro = await waitUntil(() => h1Includes(page, 'Task Instructions'), 5000);
+  assert(reachedIntro, 'condition 1: reaches the Group Label task-instructions screen');
+  const badgeText = await page.locator('.badge').first().textContent();
+  assert(/Group A/.test(badgeText || ''), `condition 1: shown group assignment matches the forced group A (got "${badgeText}")`);
+  await page.click('#task-intro-continue-btn');
+
+  const reachedMeasures = await waitUntil(() => page.locator('#measures-continue-btn').count().then((c) => c > 0), 5000);
+  assert(reachedMeasures, 'condition 1: reaches the outcome-measures (allocation task) screen');
+  const rowCount = await page.locator('.alloc-table tbody tr').count();
+  assert(rowCount === 10, `condition 1: allocation table lists all 10 participants (got ${rowCount})`);
+  const noCapShown = (await page.locator('#alloc-total-line').count()) === 0;
+  assert(noCapShown, 'condition 1 (unlimited mode): no running-total cap is shown');
+
+  await fillAllocations(page, '1');
+  await setAffectSliders(page, 15);
+  await selectCorrectComprehension(page, 'unlimited');
+  await page.click('#measures-continue-btn');
+
+  const reachedDebrief = await waitUntil(() => h1Includes(page, 'Debriefing Statement'), 5000);
+  assert(reachedDebrief, 'condition 1: reaches the debrief screen after completing measures');
+
+  const payload = await page.evaluate(() => window.__studyDebug.state.finalPayload);
+  assert(!!payload, 'condition 1: a final payload was assembled on reaching debrief');
+  assert(payload.condition === 1 && payload.conditionName === 'group_label_control', `condition 1: payload records the correct condition (got ${JSON.stringify({ c: payload.condition, n: payload.conditionName })})`);
+  assert(payload.allocationMode === 'unlimited', 'condition 1: payload records unlimited allocation mode');
+  assert(payload.allocation.entries.length === 10, 'condition 1: payload carries all 10 allocation entries');
+  assert(payload.identification === 15 && payload.ingroupAffect === 15 && payload.outgroupAffect === 15, `condition 1: payload records the slider answers (got ${JSON.stringify({ i: payload.identification, ig: payload.ingroupAffect, og: payload.outgroupAffect })})`);
+  assert(payload.comprehension.q5.correct === true && payload.comprehension.q6.correct === true, 'condition 1: comprehension answers are scored correct when the correct option is chosen');
+  assert(payload.game === null, 'condition 1: no game payload is attached (games only run in condition 2)');
+  assert(consoleErrors.length === 0, `condition 1: no JS console errors (got: ${JSON.stringify(consoleErrors)})`);
+  await page.close();
+}
+
+async function testFullFlowCondition3(browser) {
+  const page = await browser.newPage();
+  const consoleErrors = [];
+  page.on('pageerror', (e) => consoleErrors.push(String(e)));
+  page.on('console', (msg) => { if (msg.type() === 'error') consoleErrors.push(msg.text()); });
+
+  await page.goto(`${BASE}/?pid=FLOW_C3&condition=3&group=B&ingroup=4&outgroup=5&debug=1`);
+  await fillEntryAndContinue(page);
+  await fillDemographicsAndContinue(page);
+  await waitUntil(() => h1Includes(page, 'Task Instructions'), 5000);
+  await page.click('#task-intro-continue-btn');
+  await waitUntil(() => page.locator('#measures-continue-btn').count().then((c) => c > 0), 5000);
+
+  const capShown = (await page.locator('#alloc-total-line').count()) === 1;
+  assert(capShown, 'condition 3 (fixed10 mode): a running allocation total is shown');
+
+  // Over-allocate (2 coins x 10 participants = 20 > 10) and verify it's blocked.
+  await fillAllocations(page, '2');
+  await setAffectSliders(page, -20);
+  await selectCorrectComprehension(page, 'fixed10');
+  await page.click('#measures-continue-btn');
+  const blocked = (await page.locator('#alloc-error:not(.hidden)').count()) === 1;
+  assert(blocked, 'condition 3: allocating more than 10 total coins is blocked with a visible error');
+  const stillOnMeasures = (await page.locator('#measures-continue-btn').count()) === 1;
+  assert(stillOnMeasures, 'condition 3: over-cap submission does not advance past the measures screen');
+
+  // Fix it: exactly 10 coins total (1 coin x 10 participants) — the cap is
+  // "cannot exceed 10", so exactly 10 should be accepted.
+  await fillAllocations(page, '1');
+  await page.click('#measures-continue-btn');
+  const reachedDebrief = await waitUntil(() => h1Includes(page, 'Debriefing Statement'), 5000);
+  assert(reachedDebrief, 'condition 3: reaches debrief once the allocation total is brought within the 10-coin cap');
+
+  const payload = await page.evaluate(() => window.__studyDebug.state.finalPayload);
+  assert(payload.condition === 3 && payload.conditionName === 'conflict_moderator_treatment1', `condition 3: payload records the correct condition (got ${JSON.stringify({ c: payload.condition, n: payload.conditionName })})`);
+  assert(payload.allocationMode === 'fixed10', 'condition 3: payload records fixed10 allocation mode');
+  assert(payload.allocation.total === 10, `condition 3: payload records the final allocation total correctly (got ${payload.allocation.total})`);
+  assert(payload.comprehension.q7 && payload.comprehension.q8, 'condition 3: payload includes the treatment-specific comprehension questions (q7/q8)');
+  const allCorrect = ['q5', 'q6', 'q7', 'q8'].every((id) => payload.comprehension[id].correct === true);
+  assert(allCorrect, `condition 3: all four comprehension answers scored correct when the correct options were chosen (got ${JSON.stringify(payload.comprehension)})`);
+  assert(consoleErrors.length === 0, `condition 3: no JS console errors (got: ${JSON.stringify(consoleErrors)})`);
+  await page.close();
+}
+
+async function testFullFlowCondition2(browser) {
+  const page = await browser.newPage();
+  const consoleErrors = [];
+  page.on('pageerror', (e) => consoleErrors.push(String(e)));
+  page.on('console', (msg) => { if (msg.type() === 'error') consoleErrors.push(msg.text()); });
+
+  await page.goto(`${BASE}/?pid=FLOW_C2&condition=2&group=A&ingroup=1&outgroup=1&duration=3&diffDuration=3&linkDuration=6&difficulty=easy&diffDifficulty=easy&linkDifficulty=easy&debug=1`);
+  await fillEntryAndContinue(page);
+  await fillDemographicsAndContinue(page);
+
+  await page.waitForSelector('#game-frame', { timeout: 5000 });
+  let gameFrame = null;
+  const gotFrame = await waitUntil(async () => {
+    gameFrame = page.frames().find((f) => f.url().includes('game.html'));
+    return !!gameFrame;
+  }, 5000);
+  assert(gotFrame, 'condition 2: the game iframe loads game.html');
+
+  const mathDone = await answerMathUntil(gameFrame, () => h1Includes(gameFrame, 'Task 1 Complete'), 10000);
+  assert(mathDone, 'condition 2: embedded game — math task completes');
+  await gameFrame.click('#start-diff-btn');
+  const diffDone = await waitUntil(() => h1Includes(gameFrame, 'Task 2 Complete'), 10000);
+  assert(diffDone, 'condition 2: embedded game — diff task completes');
+  await gameFrame.click('#start-link-btn');
+
+  // We never click any link tiles ourselves; the link task runs out its
+  // duration on its own (bot-driven) and should then hand control back to
+  // the outer flow via postMessage, landing on the shared measures screen.
+  const reachedMeasures = await waitUntil(() => page.locator('#measures-continue-btn').count().then((c) => c > 0), 15000);
+  assert(reachedMeasures, 'condition 2: outer flow advances to outcome-measures after the embedded game finishes');
+
+  const rowCount = await page.locator('.alloc-table tbody tr').count();
+  assert(rowCount === 3, `condition 2: allocation table reuses the embedded game's own roster size (got ${rowCount} rows for ingroup=1/outgroup=1 => 3 total)`);
+
+  await fillAllocations(page, '0');
+  await setAffectSliders(page, 5);
+  await selectCorrectComprehension(page, 'unlimited');
+  await page.click('#measures-continue-btn');
+
+  const reachedDebrief = await waitUntil(() => h1Includes(page, 'Debriefing Statement'), 5000);
+  assert(reachedDebrief, 'condition 2: reaches debrief after measures');
+  const debriefText = await page.locator('.card').first().textContent();
+  assert((debriefText || '').includes('simulated by the computer'), 'condition 2: debrief discloses that teammates/opponents were simulated');
+
+  const payload = await page.evaluate(() => window.__studyDebug.state.finalPayload);
+  assert(payload.condition === 2 && payload.conditionName === 'enhanced_belonging', 'condition 2: payload records the correct condition');
+  assert(!!payload.game, "condition 2: payload carries the embedded game's full result payload");
+  assert(typeof (payload.game && payload.game.overallOutcome) === 'string', `condition 2: game payload includes overallOutcome (got ${JSON.stringify(payload.game && payload.game.overallOutcome)})`);
+  assert(Array.isArray(payload.game.roster) && payload.game.roster.length === rowCount, "condition 2: game payload's roster matches the allocation table size");
+  assert(consoleErrors.length === 0, `condition 2: no JS console errors (got: ${JSON.stringify(consoleErrors)})`);
+  await page.close();
+}
+
+async function testRandomConditionAssignment(browser) {
+  const page = await browser.newPage();
+  await page.goto(`${BASE}/?pid=FLOW_RAND&ingroup=1&outgroup=1&debug=1`);
+  await fillEntryAndContinue(page);
+  await fillDemographicsAndContinue(page);
+  const assigned = await waitUntil(async () => {
+    const c = await page.evaluate(() => window.__studyDebug.state.condition);
+    return c !== null;
+  }, 5000);
+  assert(assigned, 'random assignment: a condition is assigned when ?condition= is not forced');
+  const condition = await page.evaluate(() => window.__studyDebug.state.condition);
+  assert([1, 2, 3].includes(condition), `random assignment: assigned condition is one of 1/2/3 (got ${condition})`);
+  await page.close();
+}
+
 async function main() {
-  const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' });
+  const browser = await chromium.launch({ executablePath: resolveChromiumExecutable(), args: ['--no-sandbox'] });
   try {
     await testStandalonePlay(browser);
     await testMutualHelp(browser);
     await testPostMessageIframe(browser);
     await testReturnUrlRedirect(browser);
+    await testFullFlowCondition1(browser);
+    await testFullFlowCondition3(browser);
+    await testFullFlowCondition2(browser);
+    await testRandomConditionAssignment(browser);
   } finally {
     await browser.close();
   }

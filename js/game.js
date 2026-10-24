@@ -996,6 +996,11 @@
       linkHelpsGiven: l.helpsGiven, linkHelpsReceived: l.helpsReceived,
       totalHelpsGiven: m.helpsGiven + d.helpsGiven + l.helpsGiven,
       totalHelpsReceived: m.helpsReceived + d.helpsReceived + l.helpsReceived,
+      // Full roster (including each simulated teammate's/opponent's id and
+      // label), so an embedding page can reuse the exact same persona
+      // labels the participant just saw — e.g. for a post-task allocation
+      // task that references "Participant 4", "Participant 7", etc.
+      roster: S.roster.map((p) => ({ id: p.id, label: p.label, groupLabel: p.groupLabel, isReal: !!p.isReal })),
     };
   }
 
@@ -1019,7 +1024,15 @@
       btn.textContent = 'Continue (Return to Survey)';
       btn.addEventListener('click', () => {
         const url = new URL(CONFIG.returnUrl);
-        Object.entries(payload).forEach(([k, v]) => url.searchParams.set('sit_' + k, v));
+        // Qualtrics Embedded Data fields are flat text, so only hand off
+        // primitive values this way; structured fields like `roster` are
+        // still delivered in full via postMessage (reportCompletion) for
+        // embeds that read it directly, e.g. the full-flow study's
+        // Allocation Task re-using the exact same roster.
+        Object.entries(payload).forEach(([k, v]) => {
+          if (v !== null && typeof v === 'object') return;
+          url.searchParams.set('sit_' + k, v);
+        });
         location.href = url.toString();
       });
       slot.appendChild(btn);

@@ -1,17 +1,30 @@
-# SIT Group Identity Behavioral Experiment — Cooperative Tasks
+# SIT Group Identity Behavioral Experiment
 
-This repository contains two versions, for two different use cases:
+Reexamining Social Identity Theory's causal foundations: does group identity alone produce discrimination and negative out-group attitudes, or does that require intergroup conflict (resource scarcity) on top of it? See `jingran_kupolssurvey2026.pdf` (KU POLS Annual Survey Proposal) for the full research design this site implements.
 
-## Root directory: static version (for use with Qualtrics, recommended)
+## `index.html` — the full study (start here)
 
-`index.html` + `css/` + `js/` is a **fully static, no-server-required** page that can be deployed directly on GitHub Pages. It presents three cooperative tasks in sequence: first "Cooperative Calculation" (random group assignment, live scoreboard of simulated teammates/opponents, timed), then "Spot the Difference" (the same simulated teammates/opponents, competing on how many picture pairs each side fully completes), and finally "Match Pairs" (click two matching tiles, connect them with a path of at most two turns to clear them, competing on how many boards each side clears — with an extra speed bonus for clearing faster). Informed consent, the allocation task, the survey, and the debrief are all handled in Qualtrics.
+A **fully static, no-server-required** site, deployable directly on GitHub Pages, that runs the entire participant journey end to end — no Qualtrics required:
 
-Within each task, a **mutual-help mechanic** lets group members support each other: every few units of progress the participant earns a "help charge" they can spend on a teammate of their choosing, and teammates periodically send the participant an unprompted hint in return — always naming who sent it. See [QUALTRICS_INTEGRATION.md](./QUALTRICS_INTEGRATION.md) for the `help`/`helpThreshold` params and the helps-given/received result fields.
+**Participant Entry** (consent + eligibility) → **Pre-treatment demographics** → **Random assignment** to one of three conditions → **Common Outcome Measurements** (Allocation Task + group identification + in-group/out-group affect + a comprehension check) → **Debrief**.
 
-- Deployment steps, supported URL parameters, how to integrate with Qualtrics (either iframe+postMessage or a page-redirect handoff), and the result fields produced after all three tasks: see [QUALTRICS_INTEGRATION.md](./QUALTRICS_INTEGRATION.md)
-- Local testing: run `node test/static_server.js` to start a local static server, then open `http://localhost:8099/?pid=test&group=A&duration=20&difficulty=easy&diffDuration=30&diffDifficulty=easy&linkDuration=40&linkDifficulty=easy`
-- Automated tests (requires Playwright + Chromium already installed locally): start the static server above, then run `node test/playwright_check.js` (covers the full three-task flow, including actually clicking the correct spot-the-difference targets and actually clicking matching tile pairs to verify the scoring logic)
+The three experimental conditions:
 
-## `server-version/`: full standalone version (no Qualtrics needed)
+1. **Group Label** (control) — participants are just told their group (A or B) and asked to allocate an *unlimited* supply of gold coins among the 10 participants in their round. No conflict, no game — isolates the effect of group identity alone.
+2. **Enhanced Belonging** — the three cooperative mini-games (Cooperative Calculation, Spot the Difference, Match Pairs), including the mutual-help mechanic, embedded as an iframe. Tests whether actively *reinforcing* group belonging changes the identity effect.
+3. **Conflict Moderator** (treatment) — same as condition 1, except the 10 gold coins are *fixed*, so allocating more to one participant reduces what's left for others. Isolates the effect of adding real intergroup conflict on top of group identity.
 
-A more full-featured version with its own backend: a waiting room / instant-start flow, random group assignment, an admin interface (create studies, monitor progress, export CSV), and the complete allocation-task and survey flow are all built into this one codebase — suited to researchers who don't want to use Qualtrics and want a self-contained experiment platform instead. Built entirely on Node.js built-in modules (zero external dependencies, just run `node server.js`), and can be deployed to a platform like Render or Railway that supports long-running Node processes. See the code in that directory for details.
+Conditions 1 and 3's instructions, allocation task, identification/affect scales, and comprehension-check questions use the exact wording from the KU POLS proposal (sections 5.1/5.2). The consent text in the Entry stage is **placeholder language only** — it has not been IRB-reviewed; replace it before fielding a real study (see the in-page warning banner and comments at the top of `js/study.js`).
+
+- Supported URL parameters, the final data payload shape, and all assumptions worth double-checking: see [STUDY_FLOW.md](./STUDY_FLOW.md)
+- Saving results to Google Sheets: see [GOOGLE_SHEETS_SETUP.md](./GOOGLE_SHEETS_SETUP.md)
+- Local testing: `node test/static_server.js`, then open `http://localhost:8099/?debug=1` (add `&condition=1`, `2`, or `3` to force a specific arm instead of random assignment)
+- Automated tests: with the static server running, `node test/playwright_check.js` — covers the three-game engine itself *and* the full Entry → Debrief flow for all three conditions, including the Condition-3 allocation-cap validation and the Condition-2 iframe hand-off.
+
+## `game.html` — the three games on their own (legacy / Qualtrics-embed use)
+
+The original single-page version of just the three cooperative mini-games (Cooperative Calculation, Spot the Difference, Match Pairs, with the mutual-help mechanic), unchanged. `index.html`'s Condition 2 embeds this exact page via iframe. It's also still fully usable on its own if you ever want to run *just* the games embedded in Qualtrics (or anywhere else) instead of the full study flow above — see [QUALTRICS_INTEGRATION.md](./QUALTRICS_INTEGRATION.md) for that integration path, its URL parameters, and the result fields it produces.
+
+## `server-version/`: full standalone version with its own backend
+
+A more full-featured, older version with its own Node.js backend: a waiting room / instant-start flow, random group assignment, an admin interface (create studies, monitor progress, export CSV), and the complete allocation-task and survey flow are all built into this one codebase. Zero external dependencies (`node server.js`), deployable to a platform like Render or Railway. Superseded for most purposes by `index.html` above, which needs no backend at all; kept here for reference. See the code in that directory for details.
