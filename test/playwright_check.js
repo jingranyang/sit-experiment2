@@ -471,6 +471,19 @@ async function playContestArm(browser, mode, outcome, order, extraParams = '') {
     await groupExtras();
     await sleep(2500);
   }
+  // End-of-round screen: points animation, and (group arm) reaction chat.
+  const r1Before = await f.evaluate(() => window.__sitDebug.contest.state.rounds[0].pointsBefore);
+  assert(r1Before.own === 10 && r1Before.opp === 10, `${tag}: Round 1 transfer starts from 10 : 10 (got ${JSON.stringify(r1Before)})`);
+  assert(await f.locator('#next-round-btn').isDisabled(), `${tag}: next-round button waits for the transfer animation`);
+  if (mode === 'group') {
+    assert((await f.locator('.chat-preset-btn').count()) === 5, `${tag}: end-of-round screen keeps the team chat with 5 reaction presets`);
+    await f.locator('.chat-preset-btn').first().click({ timeout: 800 }).catch(() => {});
+  } else {
+    assert((await f.locator('.chat-preset-btn').count()) === 0, `${tag}: no chat on the end-of-round screen in the individual arm`);
+  }
+  await waitUntil(async () => !(await f.locator('#next-round-btn').isDisabled()), 8000);
+  const r1PtsAfter = await f.evaluate(() => [document.getElementById('pt-num-own').textContent, document.getElementById('pt-num-opp').textContent, document.getElementById('pt-delta-own').textContent]);
+  assert(order === 'WL' ? (r1PtsAfter[0] === '15' && r1PtsAfter[1] === '5' && r1PtsAfter[2] === '+5') : (r1PtsAfter[0] === '5' && r1PtsAfter[1] === '15' && r1PtsAfter[2] === '−5'), `${tag}: after the animation the counters read ${order === 'WL' ? '15 : 5 (+5)' : '5 : 15 (−5)'} (got ${r1PtsAfter})`);
   const r1 = await f.locator('h1').first().textContent();
   assert((order === 'WL' ? /won Round 1/ : /lost Round 1/).test(r1), `${tag}: Round 1 result matches order ${order} (got "${r1}")`);
   await f.click('#next-round-btn');
@@ -513,8 +526,12 @@ async function playContestArm(browser, mode, outcome, order, extraParams = '') {
     const given = st.math.helpsGiven + st.diff.helpsGiven + st.link.helpsGiven;
     const recv = st.math.helpsReceived + st.diff.helpsReceived + st.link.helpsReceived;
     assert(given >= 1 && recv >= 1, `${tag}: help given (${given}) and received (${recv})`);
-    const presets = ["Let's go, team! We can do this together!", "Don't give up — we can catch up!", 'Great job, keep it up!', 'I just helped you — keep going!', 'Thanks for the help!'];
-    assert(cs.chat.length >= 4 && cs.chat.every((c) => presets.includes(c.text)), `${tag}: every chat message is one of the 5 presets (n=${cs.chat.length})`);
+    const presets = await f.evaluate(() => ({ play: window.__sitDebug.contest.playPresets.map((m) => m.text), reactions: Object.values(window.__sitDebug.contest.reactionPresets).flat().map((m) => m.text) }));
+    const playMsgs = cs.chat.filter((c) => ['math', 'diff', 'link'].includes(c.phase));
+    const endMsgs = cs.chat.filter((c) => !['math', 'diff', 'link'].includes(c.phase));
+    assert(playMsgs.length >= 4 && playMsgs.every((c) => presets.play.includes(c.text)), `${tag}: every in-play chat message is one of the 5 play presets (n=${playMsgs.length})`);
+    assert(endMsgs.length >= 3 && endMsgs.every((c) => presets.reactions.includes(c.text)), `${tag}: end-of-round chat uses only the reaction presets (n=${endMsgs.length})`);
+    assert(endMsgs.some((c) => c.sender === 'self'), `${tag}: participant's own reaction appears in the end-of-round chat`);
     assert(cs.chat.some((c) => c.sender === 'self'), `${tag}: participant's own preset message appears in the chat`);
   }
   await f.click('#contest-continue-btn');

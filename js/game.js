@@ -487,7 +487,44 @@
     { id: 'm4', text: 'I just helped you — keep going!' },
     { id: 'm5', text: 'Thanks for the help!' },
   ];
-  const PRESET_TEXT = Object.fromEntries(PRESET_MESSAGES.map((m) => [m.id, m.text]));
+  // Reaction presets for the team chat on each end-of-round screen, chosen
+  // by the round's result. Same rules as above: participant can only pick
+  // these, teammates only ever say these, and none mentions the other team.
+  const REACTION_PRESETS = {
+    win: [
+      { id: 'w1', text: 'We did it! 🎉' },
+      { id: 'w2', text: 'Great teamwork, everyone!' },
+      { id: 'w3', text: 'That was close — but we made it!' },
+      { id: 'w4', text: 'Thanks for the help, team!' },
+      { id: 'w5', text: "Let's keep it up next round!" },
+    ],
+    lose: [
+      { id: 'l1', text: 'Oh no, we lost this one. 😞' },
+      { id: 'l2', text: 'Ugh, that was so close!' },
+      { id: 'l3', text: 'That hurts…' },
+      { id: 'l4', text: "Don't worry, team — we'll do better next round!" },
+      { id: 'l5', text: "Let's stick together." },
+    ],
+    winFinal: [
+      { id: 'fw1', text: 'We did it! 🎉' },
+      { id: 'fw2', text: 'Great teamwork, everyone!' },
+      { id: 'fw3', text: 'That was close — but we made it!' },
+      { id: 'fw4', text: 'Thanks for the help, team!' },
+      { id: 'fw5', text: 'We won it all!' },
+    ],
+    loseFinal: [
+      { id: 'fl1', text: 'Oh no, we lost everything. 😞' },
+      { id: 'fl2', text: 'Ugh, that was so close!' },
+      { id: 'fl3', text: 'That hurts…' },
+      { id: 'fl4', text: 'We tried our best, team.' },
+      { id: 'fl5', text: 'Thanks for playing together, everyone.' },
+    ],
+  };
+  // Teammates' scripted reactions on the end-of-round screen: which preset
+  // (by index in the set) and when (ms after the screen opens).
+  const REACTION_SCHEDULE = [{ atMs: 1400, idx: 0 }, { atMs: 3600, idx: 1 }, { atMs: 6500, idx: 3 }];
+  const ALL_PRESETS = PRESET_MESSAGES.concat(...Object.values(REACTION_PRESETS));
+  const PRESET_TEXT = Object.fromEntries(ALL_PRESETS.map((m) => [m.id, m.text]));
   const PRESET_REPLY = { m1: 'm3', m2: 'm1', m3: 'm5', m4: 'm5', m5: 'm3' };
   // Teammate chat at fixed points of each round, timed to the script so
   // "catch up" only appears while behind and "keep it up" while ahead.
@@ -528,7 +565,8 @@
       points: { own: STARTING_POINTS, opp: STARTING_POINTS },
       rounds: [],
       trajectory: [], lastSample: null,
-      chat: [], chatSentCounts: Object.fromEntries(PRESET_MESSAGES.map((m) => [m.id, 0])), chatIdx: 0,
+      chat: [], chatSentCounts: Object.fromEntries(ALL_PRESETS.map((m) => [m.id, 0])), chatIdx: 0,
+      reactionSet: null,
       realizedOutcome: null,
     };
     const ownName = isGroup ? `Group ${S.group} (your team)` : 'You';
@@ -657,10 +695,11 @@
           </div>
         </div>`;
     }
-    function pointsLine() {
+    function pointsLine(pts) {
+      const p = pts || C.points;
       return isGroup
-        ? `Points — each member of your team: <strong>${C.points.own}</strong> · each member of Group ${esc(other)}: <strong>${C.points.opp}</strong>`
-        : `Points — you: <strong>${C.points.own}</strong> · ${esc(oppName)}: <strong>${C.points.opp}</strong>`;
+        ? `Points — each member of your team: <strong>${p.own}</strong> · each member of Group ${esc(other)}: <strong>${p.opp}</strong>`
+        : `Points — you: <strong>${p.own}</strong> · ${esc(oppName)}: <strong>${p.opp}</strong>`;
     }
     function updateRopeDom() {
       const k = C.currentRound;
@@ -680,13 +719,14 @@
       if (pts) pts.innerHTML = pointsLine();
     }
 
-    function chatCardHtml() {
+    function chatCardHtml(setKey) {
       if (!isGroup) return '';
+      const presets = setKey ? REACTION_PRESETS[setKey] : PRESET_MESSAGES;
       return `<div class="card chat-card">
           <h2>Team Chat</h2>
-          <p class="muted chat-sub">Messages and help from your teammates appear here.</p>
+          <p class="muted chat-sub">${setKey ? 'How does your team feel? Share a reaction with your teammates.' : 'Messages and help from your teammates appear here.'}</p>
           <div class="chat-feed" id="chat-feed"></div>
-          <div class="chat-presets">${PRESET_MESSAGES.map((m) => `<button type="button" class="chat-preset-btn" data-msg="${m.id}">${esc(m.text)}</button>`).join('')}</div>
+          <div class="chat-presets">${presets.map((m) => `<button type="button" class="chat-preset-btn" data-msg="${m.id}">${esc(m.text)}</button>`).join('')}</div>
           <p class="muted" style="font-size:0.78rem; margin:8px 0 0;">Tap a message to send it to your team.</p>
         </div>`;
     }
@@ -699,7 +739,7 @@
       el.scrollTop = el.scrollHeight;
     }
     function post(sender, msgId) {
-      C.chat.push({ round: C.currentRound ? roundNumber(C.currentRound) : null, sender: sender.isReal ? 'self' : sender.id, senderLabel: sender.label, msgId, text: PRESET_TEXT[msgId] });
+      C.chat.push({ round: C.currentRound ? roundNumber(C.currentRound) : null, phase: S.phase, sender: sender.isReal ? 'self' : sender.id, senderLabel: sender.label, msgId, text: PRESET_TEXT[msgId] });
       renderChatFeed();
     }
     function botSay(bot, msgId) {
@@ -709,12 +749,40 @@
       post(bot || mates[randInt(0, mates.length - 1)], msgId);
     }
     function selfSend(msgId) {
-      if (!isGroup || !ROUND_TASKS.includes(S.phase)) return;
+      if (!isGroup || !(ROUND_TASKS.includes(S.phase) || C.reactionSet)) return;
+      const phaseAtSend = S.phase;
       C.chatSentCounts[msgId]++;
       post(S.roster.find((p) => p.isReal), msgId);
-      const phaseAtSend = S.phase;
-      setTimeout(() => { if (S.phase === phaseAtSend) botSay(null, PRESET_REPLY[msgId]); }, randInt(1500, 3000));
+      // During play a teammate answers with the matching preset; on an
+      // end-of-round screen with the next reaction in the same set.
+      let reply = PRESET_REPLY[msgId];
+      if (!reply && C.reactionSet) {
+        const set = REACTION_PRESETS[C.reactionSet];
+        const said = C.chat.filter((m) => m.phase === phaseAtSend).map((m) => m.msgId);
+        let i = (set.findIndex((m) => m.id === msgId) + 1) % set.length;
+        for (let k = 0; k < set.length && said.includes(set[i].id); k++) i = (i + 1) % set.length;
+        reply = set[i].id;
+      }
+      setTimeout(() => { if (S.phase === phaseAtSend) botSay(null, reply); }, randInt(1500, 3000));
     }
+    // Teammates react on the end-of-round screen on a fixed schedule.
+    function startReactions(setKey) {
+      C.reactionSet = setKey;
+      if (!isGroup) return;
+      const phaseAt = S.phase;
+      const set = REACTION_PRESETS[setKey];
+      // Skip reactions already said on this screen (e.g. the participant
+      // just picked the same one), so teammates don't parrot each other.
+      const saidHere = () => C.chat.filter((m) => m.phase === phaseAt).map((m) => m.msgId);
+      REACTION_SCHEDULE.forEach((r) => setTimeout(() => {
+        if (S.phase !== phaseAt) return;
+        const said = saidHere();
+        let i = r.idx;
+        for (let k = 0; k < set.length && said.includes(set[i].id); k++) i = (i + 1) % set.length;
+        botSay(null, set[i].id);
+      }, r.atMs));
+    }
+    function stopReactions() { C.reactionSet = null; }
     function attachChat() {
       document.querySelectorAll('.chat-preset-btn').forEach((b) => b.addEventListener('click', () => selfSend(b.dataset.msg)));
       renderChatFeed();
@@ -738,7 +806,7 @@
       };
     }
 
-    return { isGroup, other, ownName, oppName, state: C, beginRound, update, endRound, ropeCardHtml, updateRopeDom, chatCardHtml, attachChat, botSay, summary, pointsLine, roundNumber };
+    return { isGroup, other, ownName, oppName, state: C, beginRound, update, endRound, startReactions, stopReactions, playPresets: PRESET_MESSAGES, reactionPresets: REACTION_PRESETS, ropeCardHtml, updateRopeDom, chatCardHtml, attachChat, botSay, summary, pointsLine, roundNumber };
   })() : null;
 
   if (CONFIG.debug) window.__sitDebug = { get state() { return S; }, CONFIG, giveHelp, triggerHelpReceive, contest: CONTEST };
@@ -759,11 +827,12 @@
   // pinned on top (and the team chat below, group arm only); contest-
   // specific intro, between-round and results screens.
   function renderContest() {
-    document.body.classList.toggle('contest-playing', ROUND_TASKS.includes(S.phase));
+    document.body.classList.toggle('contest-playing', S.phase !== 'intro');
     if (S.phase === 'intro') return renderContestIntro();
-    if (S.phase === 'math_done') return renderContestBetween('math', 'diff', startDiffTask);
-    if (S.phase === 'diff_done') return renderContestBetween('diff', 'link', startLinkTask);
-    if (S.phase === 'results') return renderContestResults();
+    if (S.phase === 'math_done') return renderRoundEnd('math', 'diff', startDiffTask);
+    if (S.phase === 'diff_done') return renderRoundEnd('diff', 'link', startLinkTask);
+    if (S.phase === 'results') return renderRoundEnd('link', null, null);
+    CONTEST.stopReactions();
     if (S.phase === 'math') renderMathPlaying();
     else if (S.phase === 'diff') renderDiffPlaying();
     else if (S.phase === 'link') renderLinkPlaying();
@@ -851,41 +920,144 @@
       : (final ? `You lost the final round. ${esc(CONTEST.oppName)} takes all of your points.` : `You lost Round ${r.round}. You give ${r.pointsTransferred} points to ${esc(CONTEST.oppName)}.`);
   }
 
-  function renderContestBetween(doneKey, nextKey, startFn) {
+  // End-of-round screen (after each round, including the final one): same
+  // fixed layout as play. Center: the round result and an animation of the
+  // points moving from the losing side to the winning side, with both
+  // counters ticking down/up. Left: team chat with reaction presets (group
+  // arm). Right: the round's final scoreboard.
+  function renderRoundEnd(doneKey, nextKey, startFn) {
     const r = CONTEST.state.rounds[CONTEST.state.rounds.length - 1];
     const g = CONTEST.isGroup;
+    const final = doneKey === 'link';
     const won = r.realizedOutcome === 'win';
-    const headline = r.realizedOutcome === 'tie' ? `Round ${r.round}: Tie` : (g ? (won ? `Your team won Round ${r.round}!` : `Your team lost Round ${r.round}`) : (won ? `You won Round ${r.round}!` : `You lost Round ${r.round}`));
-    const finalNext = nextKey === 'link';
+    const tie = r.realizedOutcome === 'tie';
+    const headline = tie ? `Round ${r.round}: Tie`
+      : final ? (g ? (won ? 'Your team won the contest!' : 'Your team lost the contest.') : (won ? 'You won the contest!' : 'You lost the contest.'))
+      : (g ? (won ? `Your team won Round ${r.round}!` : `Your team lost Round ${r.round}`) : (won ? `You won Round ${r.round}!` : `You lost Round ${r.round}`));
+    const ownLabel = g ? 'Your team' : 'You';
+    const oppLabel = g ? `Group ${CONTEST.other}` : CONTEST.oppName;
+    const each = g ? '<div class="pt-each">points per member</div>' : '<div class="pt-each">points</div>';
+    const nextHtml = final
+      ? `<button id="contest-continue-btn" class="mt" style="width:100%;" disabled>Continue</button>`
+      : `<p class="mt next-line">Next: <strong>Round ${r.round + 1}</strong> — ${ROUND_DESC[nextKey]}.${nextKey === 'link' ? ' <strong>This is the final round: winner takes all.</strong> The losing side gives all of its points to the winning side.' : ''}</p>
+         <button id="next-round-btn" class="mt" style="width:100%;" disabled>Start Round ${r.round + 1}: ${esc(ROUND_NAMES[nextKey])}</button>`;
     app.innerHTML = `
-      <div class="card center">
+      <div class="card center round-end-card">
         <h1>${headline}</h1>
-        <div class="final-score"><span class="tug-own">${esc(CONTEST.ownName)}: <strong>${r.ownSideScore}</strong></span> &nbsp;vs&nbsp; <span class="tug-opp">${esc(CONTEST.oppName)}: <strong>${r.opposingSideScore}</strong></span></div>
-        <p class="lead mt">${roundResultText(r)}</p>
-        <div class="notice">${CONTEST.pointsLine()}</div>
-        <p class="mt">Next: <strong>Round ${r.round + 1}</strong> — ${ROUND_DESC[nextKey]}.${finalNext ? ' <strong>This is the final round: winner takes all.</strong> The losing side gives all of its points to the winning side.' : ''}</p>
-        <button id="next-round-btn" class="mt" style="width:100%;">Start Round ${r.round + 1}: ${esc(ROUND_NAMES[nextKey])}</button>
+        <div class="final-score">Round ${r.round}: <span class="tug-own">${esc(CONTEST.ownName)} <strong>${r.ownSideScore}</strong></span> &nbsp;vs&nbsp; <span class="tug-opp">${esc(CONTEST.oppName)} <strong>${r.opposingSideScore}</strong></span></div>
+        <p class="lead mt" style="margin-bottom:6px;">${roundResultText(r)}</p>
+        <div class="transfer" id="transfer">
+          <div class="pt-box own ${tie ? '' : won ? 'winner' : 'loser'}" id="pt-box-own">
+            <div class="pt-name">${esc(ownLabel)}</div>
+            <div class="pt-num" id="pt-num-own">${r.pointsBefore.own}</div>${each}
+            <div class="pt-delta" id="pt-delta-own"></div>
+          </div>
+          <div class="pt-arrow">${tie ? '=' : won ? '⟵' : '⟶'}</div>
+          <div class="pt-box opp ${tie ? '' : won ? 'loser' : 'winner'}" id="pt-box-opp">
+            <div class="pt-name">${esc(oppLabel)}</div>
+            <div class="pt-num" id="pt-num-opp">${r.pointsBefore.opp}</div>${each}
+            <div class="pt-delta" id="pt-delta-opp"></div>
+          </div>
+        </div>
+        ${nextHtml}
+      </div>
+      <div class="card compact-scoreboard"><h2>Round ${r.round} Final Score</h2><div id="scoreboard-slot">${renderScoreboardHtml(S[doneKey].teams, S[doneKey].totals)}</div></div>`;
+    // Arrange into the fixed three-column layout.
+    const [resultCard, scoreCard] = Array.from(app.children);
+    const setKey = won ? (final ? 'winFinal' : 'win') : (final ? 'loseFinal' : 'lose');
+    app.innerHTML = `
+      <div class="contest-layout ${g ? 'group' : 'individual'}">
+        <div class="cl-top">${CONTEST.ropeCardHtml(doneKey)}</div>
+        <aside class="cl-left" id="cl-left">${g && !tie ? CONTEST.chatCardHtml(setKey) : ''}</aside>
+        <main class="cl-center" id="cl-center"></main>
+        <aside class="cl-right" id="cl-right"></aside>
       </div>`;
-    document.getElementById('next-round-btn').addEventListener('click', startFn);
+    document.getElementById('cl-center').appendChild(resultCard);
+    (g ? document.getElementById('cl-right') : document.getElementById('cl-left')).appendChild(scoreCard);
+    CONTEST.state.currentRound = doneKey;
+    CONTEST.updateRopeDom();
+    const ptsLine = document.getElementById('tug-points');
+    if (ptsLine) ptsLine.innerHTML = CONTEST.pointsLine(r.pointsBefore);
+    if (g && !tie) { CONTEST.attachChat(); CONTEST.startReactions(setKey); }
+
+    const btn = document.getElementById(final ? 'contest-continue-btn' : 'next-round-btn');
+    animatePointsTransfer(r, () => {
+      if (ptsLine) ptsLine.innerHTML = CONTEST.pointsLine(r.pointsAfter);
+      btn.disabled = false;
+    });
+    btn.addEventListener('click', () => {
+      CONTEST.stopReactions();
+      if (final) {
+        reportCompletion();
+        document.body.classList.remove('contest-playing');
+        app.innerHTML = '<div class="card center"><p class="muted">Loading the next part…</p></div>';
+      } else {
+        startFn();
+      }
+    });
   }
 
-  function renderContestResults() {
-    const g = CONTEST.isGroup;
-    const r = CONTEST.state.rounds[CONTEST.state.rounds.length - 1];
-    const won = CONTEST.state.realizedOutcome === 'win';
-    const headline = CONTEST.state.realizedOutcome === 'tie' ? 'The final round was a tie' : (g ? (won ? 'Your team won the contest!' : 'Your team lost the contest.') : (won ? 'You won the contest!' : 'You lost the contest.'));
-    app.innerHTML = `
-      <div class="card center">
-        <h1>${headline}</h1>
-        <div class="final-score">Round 3: <span class="tug-own">${esc(CONTEST.ownName)} <strong>${r.ownSideScore}</strong></span> &nbsp;vs&nbsp; <span class="tug-opp">${esc(CONTEST.oppName)} <strong>${r.opposingSideScore}</strong></span></div>
-        <p class="lead mt">${roundResultText(r)}</p>
-        <div class="notice">Final ${CONTEST.pointsLine()}</div>
-        <button id="contest-continue-btn" class="mt" style="width:100%;">Continue</button>
-      </div>`;
-    document.getElementById('contest-continue-btn').addEventListener('click', () => {
-      reportCompletion();
-      app.innerHTML = '<div class="card center"><p class="muted">Loading the next part…</p></div>';
-    });
+  // Points fly one at a time from the loser's box to the winner's box; each
+  // arrival ticks the loser's counter down and the winner's up. Then the
+  // totals moved are shown as −N / +N. Calls done() when finished (also
+  // immediately-ish for a tie or reduced-motion users).
+  function animatePointsTransfer(r, done) {
+    const n = r.pointsTransferred;
+    const ownNum = document.getElementById('pt-num-own');
+    const oppNum = document.getElementById('pt-num-opp');
+    const showDeltas = () => {
+      if (!n) return;
+      const ownD = r.pointsAfter.own - r.pointsBefore.own;
+      const oppD = r.pointsAfter.opp - r.pointsBefore.opp;
+      const fmt = (d) => (d > 0 ? `+${d}` : `−${-d}`);
+      const od = document.getElementById('pt-delta-own'), pd = document.getElementById('pt-delta-opp');
+      if (od) { od.textContent = fmt(ownD); od.className = 'pt-delta show ' + (ownD > 0 ? 'up' : 'down'); }
+      if (pd) { pd.textContent = fmt(oppD); pd.className = 'pt-delta show ' + (oppD > 0 ? 'up' : 'down'); }
+    };
+    const finish = () => {
+      ownNum.textContent = r.pointsAfter.own;
+      oppNum.textContent = r.pointsAfter.opp;
+      showDeltas();
+      done();
+    };
+    const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (!n || reduced) { setTimeout(finish, n ? 600 : 300); return; }
+
+    const wrap = document.getElementById('transfer');
+    const ownWins = r.realizedOutcome === 'win';
+    const from = document.getElementById(ownWins ? 'pt-box-opp' : 'pt-box-own');
+    const to = document.getElementById(ownWins ? 'pt-box-own' : 'pt-box-opp');
+    const fromNum = ownWins ? oppNum : ownNum;
+    const toNum = ownWins ? ownNum : oppNum;
+    let fromVal = Number(fromNum.textContent), toVal = Number(toNum.textContent);
+    const step = n > 6 ? 230 : 380;
+    const startDelay = 900; // let the result sink in first
+    const center = (el) => {
+      const a = el.getBoundingClientRect(), w = wrap.getBoundingClientRect();
+      return { x: a.left - w.left + a.width / 2, y: a.top - w.top + a.height / 2 };
+    };
+    for (let i = 0; i < n; i++) {
+      setTimeout(() => {
+        const s0 = center(from), s1 = center(to);
+        const coin = document.createElement('div');
+        coin.className = 'pt-coin';
+        coin.textContent = 'P';
+        coin.style.left = `${s0.x}px`;
+        coin.style.top = `${s0.y}px`;
+        wrap.appendChild(coin);
+        fromVal--; fromNum.textContent = fromVal;
+        from.classList.remove('bump'); void from.offsetWidth; from.classList.add('bump');
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          coin.style.transform = `translate(calc(-50% + ${s1.x - s0.x}px), calc(-50% + ${s1.y - s0.y}px)) scale(0.9)`;
+        }));
+        setTimeout(() => {
+          coin.remove();
+          toVal++; toNum.textContent = toVal;
+          to.classList.remove('bump'); void to.offsetWidth; to.classList.add('bump');
+          if (i === n - 1) setTimeout(finish, 350);
+        }, 620);
+      }, startDelay + i * step);
+    }
   }
 
   function renderRosterColumns() {
