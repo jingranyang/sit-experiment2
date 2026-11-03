@@ -420,48 +420,142 @@ async function testFullFlowCondition1(browser) {
   await page.close();
 }
 
-async function testFullFlowCondition3(browser) {
-  const page = await browser.newPage();
+// Non-blocking heading check (h1Includes waits for an <h1> to exist,
+// which stalls during gameplay screens that have none).
+async function h1Now(ctx, text) {
+  const h = await ctx.evaluate(() => { const el = document.querySelector('h1'); return el ? el.textContent : ''; }).catch(() => '');
+  return h.includes(text);
+}
+
+// Condition 3 = Experiment 3 "Intergroup Conflict Contest": the same three
+// game.html tasks as Condition 2, in contest mode (tug-of-war rope, scripted
+// opposing side, preset-only team chat in the group arm). Plays one arm of
+// the 2 (group/individual) x 2 (win/lose) design at a human-like pace.
+async function playContestArm(browser, mode, outcome, extraParams = '') {
+  const tag = `condition 3 [${mode}/${outcome}${extraParams ? ' ' + extraParams : ''}]`;
+  const page = await browser.newPage({ viewport: { width: 760, height: 1400 } });
   const consoleErrors = [];
   page.on('pageerror', (e) => consoleErrors.push(String(e)));
   page.on('console', (msg) => { if (msg.type() === 'error') consoleErrors.push(msg.text()); });
 
-  await page.goto(`${BASE}/?pid=FLOW_C3&condition=3&group=B&ingroup=4&outgroup=5&debug=1`);
+  await page.goto(`${BASE}/?pid=FLOW_C3_${mode}_${outcome}&condition=3&contestMode=${mode}&outcome=${outcome}&group=B&ingroup=4&outgroup=5&duration=40&diffDuration=25&linkDuration=25&difficulty=easy&diffDifficulty=easy&linkDifficulty=easy&helpThreshold=3&helpReceiveInterval=6&debug=1${extraParams}`);
   await fillEntryAndContinue(page);
   await fillDemographicsAndContinue(page);
-  await waitUntil(() => h1Includes(page, 'Task Instructions'), 5000);
-  await page.click('#task-intro-continue-btn');
+  await page.waitForSelector('#game-frame', { timeout: 5000 });
+  let f = null;
+  await waitUntil(async () => { f = page.frames().find((x) => x.url().includes('game.html')); return !!f; }, 5000);
+  const reachedIntro = await waitUntil(() => h1Includes(f, 'Tug-of-War Contest'), 5000);
+  assert(reachedIntro, `${tag}: game.html opens in contest mode with the contest instructions`);
+  await f.click('#start-btn');
+  await f.waitForSelector('#tug-knot', { timeout: 5000 });
+  assert((await f.locator('.chat-preset-btn').count()) === (mode === 'group' ? 5 : 0), `${tag}: ${mode === 'group' ? 'team chat shows exactly the 5 preset messages' : 'no chat in the individual arm'}`);
+  assert((await f.locator('textarea, input[type="text"]').count()) === 0, `${tag}: no free-text chat input exists`);
+  assert((await f.locator('.help-panel').count()) === (mode === 'group' ? 1 : 0), `${tag}: mutual-help panel ${mode === 'group' ? 'present' : 'absent'}`);
+
+  let sentChat = false;
+  async function groupExtras() {
+    if (mode !== 'group') return;
+    if (!sentChat) { await f.locator('.chat-preset-btn').first().click({ timeout: 800 }).catch(() => {}); sentChat = true; }
+    const helpBtn = f.locator('.help-target-btn').first();
+    if (await helpBtn.count()) await helpBtn.click({ timeout: 800 }).catch(() => {});
+  }
+  // Round 1: math, ~1 correct answer per 2.5s.
+  while (!(await h1Now(f, 'Round 1 Complete'))) {
+    const t = await f.locator('.problem-text').textContent({ timeout: 800 }).catch(() => null);
+    const m = t && t.match(/(-?\d+)\s*([+\-*])\s*(-?\d+)\s*=/);
+    if (m) {
+      const x = Number(m[1]), op = m[2], y = Number(m[3]);
+      await f.locator('#answer-input').fill(String(op === '+' ? x + y : op === '-' ? x - y : x * y), { timeout: 800 }).catch(() => {});
+      await f.locator('#answer-input').press('Enter', { timeout: 800 }).catch(() => {});
+    }
+    await groupExtras();
+    await sleep(2500);
+  }
+  await f.click('#next-round-btn');
+  // Round 2: spot the difference, one difference clicked every ~2s.
+  while (!(await h1Now(f, 'Round 2 Complete'))) {
+    const round = await f.evaluate(() => window.__sitDebug.state.diff.round).catch(() => null);
+    const box = await f.locator('#diff-canvas-a').boundingBox({ timeout: 800 }).catch(() => null);
+    const next = round && round.diffs.find((d) => !d.found);
+    if (box && next) await page.mouse.click(box.x + next.aX, box.y + next.aY).catch(() => {});
+    await groupExtras();
+    await sleep(2000);
+  }
+  await f.click('#next-round-btn');
+  // Round 3: match pairs, one pair every ~1.5s.
+  while (!(await h1Now(f, 'won')) && !(await h1Now(f, 'lost'))) {
+    const pair = await f.evaluate(() => { const b = window.__sitDebug.state.link.board; return b ? window.LinkMatch.findValidPair(b) : null; }).catch(() => null);
+    if (pair) {
+      await f.locator(`[data-idx="${pair[0]}"]`).click({ timeout: 800 }).catch(() => {});
+      await sleep(60);
+      await f.locator(`[data-idx="${pair[1]}"]`).click({ timeout: 800 }).catch(() => {});
+    }
+    await groupExtras();
+    await sleep(1500);
+  }
+  const headline = await f.locator('h1').first().textContent();
+  assert(outcome === 'win' ? /won/.test(headline) : /lost/.test(headline), `${tag}: results screen shows the assigned outcome (got "${headline}")`);
+  const st = await f.evaluate(() => window.__sitDebug.state);
+  const cs = await f.evaluate(() => window.__sitDebug.contest.state);
+  assert(cs.leadChanges >= 2, `${tag}: the lead changed hands at least twice (got ${cs.leadChanges})`);
+  assert(cs.ownUnits.math > 0 && cs.ownUnits.diff > 0 && cs.ownUnits.link > 0, `${tag}: all three tasks fed the rope (own units ${JSON.stringify(cs.ownUnits)})`);
+  if (mode === 'group') {
+    const given = st.math.helpsGiven + st.diff.helpsGiven + st.link.helpsGiven;
+    const recv = st.math.helpsReceived + st.diff.helpsReceived + st.link.helpsReceived;
+    assert(given >= 1 && recv >= 1, `${tag}: help given (${given}) and received (${recv})`);
+    const presets = ["Let's go, team! We can do this together!", "Don't give up — we can catch up!", 'Great job, keep it up!', 'I just helped you — keep going!', 'Thanks for the help!'];
+    assert(cs.chat.length >= 4 && cs.chat.every((c) => presets.includes(c.text)), `${tag}: every chat message is one of the 5 presets (n=${cs.chat.length})`);
+    assert(cs.chat.some((c) => c.sender === 'self'), `${tag}: participant's own preset message appears in the chat`);
+  }
+  await f.click('#contest-continue-btn');
+
   await waitUntil(() => page.locator('#measures-continue-btn').count().then((c) => c > 0), 5000);
+  assert((await page.locator('.alloc-table tbody tr').count()) === 10, `${tag}: allocation table lists all 10 participants`);
+  assert((await page.locator('.alloc-table thead th').count()) === (mode === 'group' ? 3 : 2), `${tag}: Group column ${mode === 'group' ? 'shown' : 'hidden'}`);
+  assert((await page.locator('#identification').count()) === (mode === 'group' ? 1 : 0), `${tag}: group-identification question ${mode === 'group' ? 'shown' : 'omitted'}`);
 
-  const capShown = (await page.locator('#alloc-total-line').count()) === 1;
-  assert(capShown, 'condition 3 (fixed10 mode): a running allocation total is shown');
-
-  // Over-allocate (2 coins x 10 participants = 20 > 10) and verify it's blocked.
-  await fillAllocations(page, '2');
-  await setAffectSliders(page, -20);
-  await selectCorrectComprehension(page, 'fixed10');
+  const fixed10 = extraParams.includes('exp3Alloc=fixed10');
+  await fillAllocations(page, fixed10 ? '0' : '1');
+  await page.evaluate((v) => {
+    ['identification', 'ingroupAffect', 'outgroupAffect'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.value = String(v);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }, -10);
+  await selectCorrectComprehension(page, fixed10 ? 'fixed10' : 'unlimited');
+  await page.locator('input[name="comp-qc1"][value="Only the winning side"]').check();
+  await page.locator(`input[name="comp-qc2"][value="${outcome === 'win' ? 'Won' : 'Lost'}"]`).check();
   await page.click('#measures-continue-btn');
-  const blocked = (await page.locator('#alloc-error:not(.hidden)').count()) === 1;
-  assert(blocked, 'condition 3: allocating more than 10 total coins is blocked with a visible error');
-  const stillOnMeasures = (await page.locator('#measures-continue-btn').count()) === 1;
-  assert(stillOnMeasures, 'condition 3: over-cap submission does not advance past the measures screen');
 
-  // Fix it: exactly 10 coins total (1 coin x 10 participants) — the cap is
-  // "cannot exceed 10", so exactly 10 should be accepted.
-  await fillAllocations(page, '1');
-  await page.click('#measures-continue-btn');
-  const reachedDebrief = await waitUntil(() => h1Includes(page, 'Debriefing Statement'), 5000);
-  assert(reachedDebrief, 'condition 3: reaches debrief once the allocation total is brought within the 10-coin cap');
-
+  assert(await waitUntil(() => h1Includes(page, 'Debriefing Statement'), 5000), `${tag}: reaches debrief`);
+  const debriefText = await page.locator('.card').first().textContent();
+  assert(/determined in advance/.test(debriefText || ''), `${tag}: debrief discloses the predetermined outcome and simulated participants`);
   const payload = await page.evaluate(() => window.__studyDebug.state.finalPayload);
-  assert(payload.condition === 3 && payload.conditionName === 'conflict_moderator_treatment1', `condition 3: payload records the correct condition (got ${JSON.stringify({ c: payload.condition, n: payload.conditionName })})`);
-  assert(payload.allocationMode === 'fixed10', 'condition 3: payload records fixed10 allocation mode');
-  assert(payload.allocation.total === 10, `condition 3: payload records the final allocation total correctly (got ${payload.allocation.total})`);
-  assert(payload.comprehension.q7 && payload.comprehension.q8, 'condition 3: payload includes the treatment-specific comprehension questions (q7/q8)');
-  const allCorrect = ['q5', 'q6', 'q7', 'q8'].every((id) => payload.comprehension[id].correct === true);
-  assert(allCorrect, `condition 3: all four comprehension answers scored correct when the correct options were chosen (got ${JSON.stringify(payload.comprehension)})`);
-  assert(consoleErrors.length === 0, `condition 3: no JS console errors (got: ${JSON.stringify(consoleErrors)})`);
+  assert(payload.condition === 3 && payload.conditionName === 'intergroup_conflict_contest', `${tag}: payload records condition 3`);
+  assert(payload.contestMode === mode && payload.contestOutcomeAssigned === outcome, `${tag}: payload records contest mode and assigned outcome`);
+  assert(payload.contest && payload.contest.outcomeManipulationOk === true, `${tag}: realized outcome matches assigned (realized=${payload.contest && payload.contest.realizedOutcome})`);
+  assert(payload.game && payload.game.overallOutcome === outcome, `${tag}: game payload overallOutcome matches`);
+  assert(payload.allocationMode === (fixed10 ? 'fixed10' : 'unlimited'), `${tag}: payload records the allocation mode`);
+  assert(payload.comprehension.qc1.correct && payload.comprehension.qc2.correct, `${tag}: contest comprehension checks scored correct`);
+  assert(mode === 'group' ? payload.identification === -10 : payload.identification === null, `${tag}: identification recorded (group) / null (individual)`);
+  if (mode === 'individual') {
+    const opp = payload.allocation.entries.filter((e) => e.isOpponent);
+    const oppInGame = payload.game.roster.find((p) => !p.isReal);
+    assert(opp.length === 1 && oppInGame && opp[0].label === oppInGame.label, `${tag}: the flagged opponent in the allocation table is the same participant faced in the contest`);
+  }
+  assert(consoleErrors.length === 0, `${tag}: no JS console errors (got: ${JSON.stringify(consoleErrors)})`);
   await page.close();
+}
+
+async function testFullFlowCondition3(browser) {
+  await Promise.all([
+    playContestArm(browser, 'group', 'win'),
+    playContestArm(browser, 'group', 'lose'),
+    playContestArm(browser, 'individual', 'win'),
+    playContestArm(browser, 'individual', 'lose', '&exp3Alloc=fixed10'),
+  ]);
 }
 
 async function testFullFlowCondition2(browser) {

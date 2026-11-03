@@ -58,6 +58,15 @@
   //                  Qualtrics data center domain)
   //   autostart      '1' skips the intro screen and starts the math task
   //                  immediately
+  //   contest        Experiment 3 only. 'group' | 'individual' turns the
+  //                  three tasks into a zero-sum tug-of-war contest (see the
+  //                  CONTEST section below). Omit for Experiment 2 — the
+  //                  page then behaves exactly as before.
+  //   outcome        Experiment 3 only: 'win' | 'lose' — the contest result
+  //                  the participant will experience (randomized upstream).
+  //   selfLabel / oppLabel  Experiment 3 individual arm only: the
+  //                  participant's and the opponent's "Participant N"
+  //                  labels, so they match the outer study's roster.
   //   debug          '1' exposes window.__sitDebug with internal state, used
   //                  by the automated test suite to click exact difference
   //                  coordinates instead of guessing pixels
@@ -110,7 +119,20 @@
     targetOrigin: qs.get('origin') || '*',
     autostart: qs.get('autostart') === '1',
     debug: qs.get('debug') === '1',
+    contest: ['group', 'individual'].includes(qs.get('contest')) ? qs.get('contest') : null,
+    contestOutcome: qs.get('outcome') === 'win' ? 'win' : 'lose',
+    selfLabel: clampInt(qs.get('selfLabel'), 0, 0, 999),
+    oppLabel: clampInt(qs.get('oppLabel'), 0, 0, 999),
   };
+  // Experiment 3 individual arm: one-on-one, no teammates, no help, no chat.
+  if (CONFIG.contest === 'individual') {
+    CONFIG.inGroupCount = 0;
+    CONFIG.outGroupCount = 1;
+    CONFIG.helpEnabled = false;
+  }
+  // In a contest the opposing side is driven by the contest script, not by
+  // the probabilistic bias; own-side teammates play at a neutral pace.
+  if (CONFIG.contest) CONFIG.bias = 'tie';
 
   // ---------------------------------------------------------------------
   // Math problem generator
@@ -151,6 +173,10 @@
       if (slot.isReal) { realLabel = label; return { id: 'self', label, groupLabel: slot.groupLabel, isReal: true }; }
       return { id: slot.botId, label, groupLabel: slot.groupLabel, isReal: false };
     });
+    if (CONFIG.contest === 'individual' && CONFIG.selfLabel && CONFIG.oppLabel) {
+      roster.forEach((p) => { p.label = p.isReal ? CONFIG.selfLabel : CONFIG.oppLabel; });
+      realLabel = CONFIG.selfLabel;
+    }
     return { roster, realGroup, realLabel };
   }
 
@@ -298,6 +324,7 @@
     t.helpsGiven++;
     pushHelpFeed(taskKey, `You gave Participant ${bot.label} a hint.`);
     showHelpToast(`You helped Participant ${bot.label}!`);
+    if (CONTEST) setTimeout(() => { if (S.phase === taskKey) CONTEST.botSay(bot, 'm5'); }, randInt(1200, 2400));
     refreshTaskScoreboardImmediate(taskKey);
     refreshHelpPanel(taskKey);
   }
@@ -327,6 +354,7 @@
       t.helpsReceived++;
       pushHelpFeed(taskKey, `Participant ${helper.label} gave you a hint!`);
       showHelpToast(`Participant ${helper.label} gave you a hint!`);
+      if (CONTEST) CONTEST.botSay(helper, 'm4');
       refreshHelpPanel(taskKey);
     }
     scheduleHelpReceive(taskKey);
@@ -407,9 +435,231 @@
     attachHelpPanelListeners(taskKey);
   }
 
-  if (CONFIG.debug) window.__sitDebug = { get state() { return S; }, CONFIG, giveHelp, triggerHelpReceive };
+
+  // =======================================================================
+  // CONTEST (Experiment 3): a zero-sum tug-of-war layered on top of the
+  // exact same three tasks. Each side's pull = its correct answers in
+  // Task 1 + completed picture pairs in Task 2 + cleared boards in Task 3,
+  // each weighted (PULL_WEIGHT) so one unit of work in each task moves the
+  // rope a comparable amount. One rope spans all three tasks; whoever has
+  // pulled it to their side at the end of Task 3 wins the whole reward.
+  //
+  // The opposing side's score is generated relative to the participant's
+  // own side, following a fixed lead-change script (identical for every
+  // participant, only the final stretch differs by assigned outcome), so
+  // the lead swings back and forth and ends in a close win or close loss.
+  // =======================================================================
+  const PULL_WEIGHT = { math: 1, diff: 4, link: 6 };
+  const CONTEST_SCRIPT = [
+    { until: 0.12, lead: 0.5 },   // neck and neck
+    { until: 0.32, lead: 2.0 },   // opponent pulls ahead
+    { until: 0.52, lead: -2.0 },  // participant's side takes the lead
+    { until: 0.72, lead: 2.2 },   // opponent comes back
+    { until: 0.86, lead: -0.6 },  // participant's side edges back in front
+  ];
+  const CONTEST_FINAL_LEAD = { lose: 1.6, win: -1.6 };
+  // The five preset messages. Participants can only send these (no free
+  // text); simulated teammates only ever send these. All are in-group
+  // encouragement / thanks — none mentions or disparages the other team.
+  const PRESET_MESSAGES = [
+    { id: 'm1', text: "Let's go, team! We can do this together!" },
+    { id: 'm2', text: "Don't give up — we can catch up!" },
+    { id: 'm3', text: 'Great job, keep it up!' },
+    { id: 'm4', text: 'I just helped you — keep going!' },
+    { id: 'm5', text: 'Thanks for the help!' },
+  ];
+  const PRESET_TEXT = Object.fromEntries(PRESET_MESSAGES.map((m) => [m.id, m.text]));
+  const PRESET_REPLY = { m1: 'm3', m2: 'm1', m3: 'm5', m4: 'm5', m5: 'm3' };
+  // Teammate chat at fixed points of the contest, timed to the script so
+  // "catch up" only appears while behind and "keep it up" while ahead.
+  const TEAM_CHAT_SCHEDULE = [
+    { at: 0.04, msg: 'm1' }, { at: 0.24, msg: 'm2' }, { at: 0.44, msg: 'm3' },
+    { at: 0.64, msg: 'm2' }, { at: 0.80, msg: 'm3' }, { at: 0.92, msg: 'm1' },
+  ];
+
+  const CONTEST = CONFIG.contest ? (function () {
+    const isGroup = CONFIG.contest === 'group';
+    const other = S.group === 'A' ? 'B' : 'A';
+    const ownSize = S.roster.filter((p) => p.groupLabel === S.group).length;
+    const oppMembers = S.roster.filter((p) => p.groupLabel === other);
+    const oppSize = Math.max(1, oppMembers.length);
+    const durations = { math: CONFIG.durationSec, diff: CONFIG.diffDurationSec, link: CONFIG.linkDurationSec };
+    const totalMs = (durations.math + durations.diff + durations.link) * 1000;
+    const before = { math: 0, diff: durations.math * 1000, link: (durations.math + durations.diff) * 1000 };
+    const unit = Math.max(2, Math.round(ownSize * 1.2)); // one "lead unit", in pull points
+    const oppBaseRate = Math.max(0.9, oppSize * 0.5);     // max opposing pull per second
+    const C = {
+      mode: CONFIG.contest,
+      assignedOutcome: CONFIG.contestOutcome,
+      ownUnits: { math: 0, diff: 0, link: 0 },
+      oppUnits: { math: 0, diff: 0, link: 0 },
+      credit: 0,
+      leadChanges: 0, lastLeader: null,
+      trajectory: [], lastSampleSec: -1,
+      chat: [], chatSentCounts: Object.fromEntries(PRESET_MESSAGES.map((m) => [m.id, 0])), chatIdx: 0,
+      realizedOutcome: null,
+    };
+    const ownName = isGroup ? `Group ${S.group} (your team)` : 'You';
+    const oppName = isGroup ? `Group ${other}` : `Participant ${oppMembers[0] ? oppMembers[0].label : '?'}`;
+
+    function pull(units) { return units.math * PULL_WEIGHT.math + units.diff * PULL_WEIGHT.diff + units.link * PULL_WEIGHT.link; }
+    function ownPull() { return pull(C.ownUnits); }
+    function oppPull() { return pull(C.oppUnits); }
+    function scriptedLead(p) {
+      for (const seg of CONTEST_SCRIPT) if (p < seg.until) return seg.lead;
+      return CONTEST_FINAL_LEAD[C.assignedOutcome];
+    }
+
+    // Called on every scoreboard refresh for the current task. Updates the
+    // opposing side (only when dtSec > 0, i.e. on the timed tick), then
+    // overwrites the opposing team's scoreboard entries with it.
+    function update(taskKey, t, elapsedMs, dtSec) {
+      C.ownUnits[taskKey] = t.totals[S.group] || 0;
+      const globalMs = before[taskKey] + elapsedMs;
+      if (dtSec > 0) {
+        const p = Math.min(1, globalMs / totalMs);
+        const own = ownPull();
+        const target = own + scriptedLead(p) * unit;
+        const ownRate = globalMs > 5000 ? own / (globalMs / 1000) : 0;
+        const rate = Math.max(oppBaseRate, ownRate * 2);
+        const w = PULL_WEIGHT[taskKey];
+        if (target > oppPull() + w / 2) {
+          C.credit += (rate * dtSec * randFloat(0.6, 1.4)) / w;
+          while (C.credit >= 1 && oppPull() + w / 2 < target) { C.oppUnits[taskKey]++; C.credit -= 1; }
+        } else {
+          C.credit = 0;
+        }
+        if (isGroup && C.chatIdx < TEAM_CHAT_SCHEDULE.length && p >= TEAM_CHAT_SCHEDULE[C.chatIdx].at) {
+          botSay(null, TEAM_CHAT_SCHEDULE[C.chatIdx].msg);
+          C.chatIdx++;
+        }
+        const sec = Math.floor(globalMs / 1000);
+        if (sec !== C.lastSampleSec) { C.lastSampleSec = sec; C.trajectory.push({ t: sec, task: taskKey, own: ownPull(), opp: oppPull() }); }
+      }
+      overrideOpposingScoreboard(taskKey, t);
+      const diff = ownPull() - oppPull();
+      const leader = diff > 0 ? 'own' : diff < 0 ? 'opp' : null;
+      if (leader && C.lastLeader && leader !== C.lastLeader) C.leadChanges++;
+      if (leader) C.lastLeader = leader;
+      updateRopeDom();
+    }
+
+    function overrideOpposingScoreboard(taskKey, t) {
+      const n = C.oppUnits[taskKey];
+      t.totals[other] = n;
+      const list = (t.teams[other] || []).slice().sort((a, b) => a.label - b.label);
+      const base = Math.floor(n / Math.max(1, list.length));
+      let rem = n - base * list.length;
+      list.forEach((m) => { m.correctCount = base + (rem > 0 ? 1 : 0); rem--; });
+    }
+
+    // At the end of Task 3: make sure the assigned outcome holds at the
+    // buzzer. A loss can always be forced; a win can't be if the opposing
+    // side already passed a participant's side that stopped playing — that
+    // rare case is flagged via outcomeManipulationOk = false.
+    function finalize() {
+      if (C.assignedOutcome === 'lose' && oppPull() <= ownPull()) {
+        while (oppPull() <= ownPull() + unit / 2) C.oppUnits.link++;
+      }
+      const d = ownPull() - oppPull();
+      C.realizedOutcome = d > 0 ? 'win' : d < 0 ? 'lose' : 'tie';
+    }
+
+    function ropeCardHtml() {
+      return `<div class="card contest-top">
+          <div class="tug">
+            <div class="tug-labels"><span class="tug-own">${esc(ownName)}</span><span class="tug-opp">${esc(oppName)}</span></div>
+            <div class="tug-track">
+              <div class="tug-zone own"></div><div class="tug-zone opp"></div>
+              <div class="tug-center"></div><div class="tug-rope"></div>
+              <div class="tug-knot" id="tug-knot"></div>
+            </div>
+            <div class="tug-scores">
+              <span class="tug-score own" id="pull-own">0</span>
+              <span class="tug-status" id="tug-status">Tied</span>
+              <span class="tug-score opp" id="pull-opp">0</span>
+            </div>
+          </div>
+        </div>`;
+    }
+    function updateRopeDom() {
+      const own = ownPull(), opp = oppPull(), diff = own - opp;
+      const o = document.getElementById('pull-own'), q = document.getElementById('pull-opp');
+      if (o) o.textContent = String(own);
+      if (q) q.textContent = String(opp);
+      const st = document.getElementById('tug-status');
+      if (st) {
+        const who = isGroup ? 'Your team is' : 'You are';
+        st.textContent = diff > 0 ? `${who} ahead by ${diff}` : diff < 0 ? `${who} behind by ${-diff}` : 'Tied';
+        st.className = 'tug-status ' + (diff > 0 ? 'ahead' : diff < 0 ? 'behind' : '');
+      }
+      const knot = document.getElementById('tug-knot');
+      if (knot) knot.style.left = `${50 + Math.max(-1, Math.min(1, -diff / (unit * 3))) * 42}%`;
+    }
+
+    function chatCardHtml() {
+      if (!isGroup) return '';
+      return `<div class="card chat-card">
+          <h2>Team Chat</h2>
+          <div class="chat-feed" id="chat-feed"></div>
+          <div class="chat-presets">${PRESET_MESSAGES.map((m) => `<button type="button" class="chat-preset-btn" data-msg="${m.id}">${esc(m.text)}</button>`).join('')}</div>
+          <p class="muted" style="font-size:0.78rem; margin:8px 0 0;">Tap a message to send it to your team.</p>
+        </div>`;
+    }
+    function renderChatFeed() {
+      const el = document.getElementById('chat-feed');
+      if (!el) return;
+      el.innerHTML = C.chat.length
+        ? C.chat.map((m) => `<div class="chat-msg ${m.sender === 'self' ? 'me' : ''}"><span class="chat-who">Participant ${esc(m.senderLabel)}${m.sender === 'self' ? ' (you)' : ''}</span><span class="chat-text">${esc(m.text)}</span></div>`).join('')
+        : '<div class="muted" style="font-size:0.85rem;">No messages yet.</div>';
+      el.scrollTop = el.scrollHeight;
+    }
+    function post(sender, msgId) {
+      C.chat.push({ phase: S.phase, sender: sender.isReal ? 'self' : sender.id, senderLabel: sender.label, msgId, text: PRESET_TEXT[msgId] });
+      renderChatFeed();
+    }
+    function botSay(bot, msgId) {
+      if (!isGroup) return;
+      const mates = ingroupBots();
+      if (!mates.length) return;
+      post(bot || mates[randInt(0, mates.length - 1)], msgId);
+    }
+    function selfSend(msgId) {
+      if (!isGroup || !['math', 'diff', 'link'].includes(S.phase)) return;
+      C.chatSentCounts[msgId]++;
+      post(S.roster.find((p) => p.isReal), msgId);
+      const phaseAtSend = S.phase;
+      setTimeout(() => { if (S.phase === phaseAtSend) botSay(null, PRESET_REPLY[msgId]); }, randInt(1500, 3000));
+    }
+    function attachChat() {
+      document.querySelectorAll('.chat-preset-btn').forEach((b) => b.addEventListener('click', () => selfSend(b.dataset.msg)));
+      renderChatFeed();
+    }
+
+    function summary() {
+      return {
+        mode: C.mode,
+        assignedOutcome: C.assignedOutcome,
+        realizedOutcome: C.realizedOutcome,
+        outcomeManipulationOk: C.realizedOutcome === C.assignedOutcome,
+        pullWeights: PULL_WEIGHT,
+        finalPullOwnSide: ownPull(),
+        finalPullOpposingSide: oppPull(),
+        ownSideUnits: C.ownUnits,
+        opposingSideUnits: C.oppUnits,
+        leadChanges: C.leadChanges,
+        trajectory: C.trajectory,
+        chat: isGroup ? { log: C.chat, selfSentTotal: Object.values(C.chatSentCounts).reduce((a, b) => a + b, 0), selfSentByMessage: C.chatSentCounts } : null,
+      };
+    }
+
+    return { isGroup, other, ownName, oppName, state: C, update, finalize, ropeCardHtml, updateRopeDom, chatCardHtml, attachChat, botSay, summary, ownPull, oppPull };
+  })() : null;
+
+  if (CONFIG.debug) window.__sitDebug = { get state() { return S; }, CONFIG, giveHelp, triggerHelpReceive, contest: CONTEST };
 
   function render() {
+    if (CONTEST) return renderContest();
     if (S.phase === 'intro') return renderIntro();
     if (S.phase === 'math') return renderMathPlaying();
     if (S.phase === 'math_done') return renderMathDone();
@@ -417,6 +667,80 @@
     if (S.phase === 'diff_done') return renderDiffDone();
     if (S.phase === 'link') return renderLinkPlaying();
     if (S.phase === 'results') return renderResults();
+  }
+
+
+  // Contest-mode screens: same three task screens, with the rope pinned on
+  // top (and the team chat below, group arm only); contest-specific intro,
+  // between-task and results screens.
+  function renderContest() {
+    if (S.phase === 'intro') return renderContestIntro();
+    if (S.phase === 'math_done') return renderContestBetween(1, 'Task 2: Spot the Difference', 'find all the differences between two pictures', startDiffTask);
+    if (S.phase === 'diff_done') return renderContestBetween(2, 'Task 3: Match Pairs', 'click two matching tiles that can be connected by a path with at most two turns; clearing a whole board counts as one round', startLinkTask);
+    if (S.phase === 'results') return renderContestResults();
+    if (S.phase === 'math') renderMathPlaying();
+    else if (S.phase === 'diff') renderDiffPlaying();
+    else if (S.phase === 'link') renderLinkPlaying();
+    app.insertAdjacentHTML('afterbegin', CONTEST.ropeCardHtml());
+    if (CONTEST.isGroup) {
+      const scoreCard = document.getElementById('scoreboard-slot');
+      (scoreCard ? scoreCard.closest('.card') : app.lastElementChild).insertAdjacentHTML('afterend', CONTEST.chatCardHtml());
+      CONTEST.attachChat();
+    }
+    CONTEST.updateRopeDom();
+  }
+
+  function renderContestIntro() {
+    const g = CONTEST.isGroup;
+    const opp = S.roster.find((p) => p.groupLabel === CONTEST.other);
+    app.innerHTML = `
+      <div class="card">
+        <h1>Tug-of-War Contest</h1>
+        ${g
+          ? `<p>You have been assigned to <span class="badge ${S.group === 'A' ? 'a' : 'b'}">Group ${esc(S.group)}</span>. Your team will compete against Group ${esc(CONTEST.other)}.</p>`
+          : `<p>You will compete one-on-one against another participant (Participant ${esc(opp ? opp.label : '?')}).</p>`}
+        <p>The contest has three rounds: a calculation challenge, then "Spot the Difference", then "Match Pairs". Every problem ${g ? 'your team solves' : 'you solve'} pulls the rope toward ${g ? 'your team' : 'you'}; every problem the other side solves pulls it the other way. You can watch the rope and both sides' scores at all times.</p>
+        <p><strong>${g ? 'The team that has pulled the rope to its side at the end of Round 3 wins. Every member of the winning team receives a bonus reward; members of the losing team receive nothing.' : 'Whoever has pulled the rope to their side at the end of Round 3 wins. The winner receives a bonus reward; the loser receives nothing.'}</strong></p>
+        ${g ? `<p><strong>Helping your team:</strong> every ${CONFIG.helpThreshold} problems you complete earn you a chance to help a teammate of your choice, and teammates can help you too. You can also send messages to your team with the message buttons.</p>` : ''}
+        <p class="muted">There is no cooperation between the two sides: any point one side gains is a point the other side has to make up.</p>
+      </div>
+      ${g ? `<div class="card"><h2>Team Roster</h2>${renderRosterColumns()}</div>` : ''}
+      <div class="card"><button id="start-btn" style="width:100%;">Start Round 1: Calculation</button></div>`;
+    document.getElementById('start-btn').addEventListener('click', startMathTask);
+  }
+
+  function renderContestBetween(doneNum, nextName, nextDesc, startFn) {
+    app.innerHTML = `
+      <div class="card center">
+        <h1>Round ${doneNum} Complete</h1>
+        <p class="lead">The contest continues. Next is ${esc(nextName)} — ${esc(nextDesc)}. The rope carries over from where it is now.</p>
+        <button id="next-round-btn" class="mt" style="width:100%;">Start ${esc(nextName)}</button>
+      </div>`;
+    app.insertAdjacentHTML('afterbegin', CONTEST.ropeCardHtml());
+    CONTEST.updateRopeDom();
+    document.getElementById('next-round-btn').addEventListener('click', startFn);
+  }
+
+  function renderContestResults() {
+    const g = CONTEST.isGroup;
+    const won = CONTEST.state.realizedOutcome === 'win';
+    const headline = g ? (won ? 'Your team won!' : 'Your team lost.') : (won ? 'You won!' : 'You lost.');
+    const reward = g
+      ? (won ? 'Every member of your team receives the bonus reward.' : `Group ${esc(CONTEST.other)} receives the bonus reward. Your team receives nothing.`)
+      : (won ? 'You receive the bonus reward.' : `${esc(CONTEST.oppName)} receives the bonus reward. You receive nothing.`);
+    app.innerHTML = `
+      <div class="card center">
+        <h1>${headline}</h1>
+        <div class="final-score"><span class="tug-own">${esc(CONTEST.ownName)}: <strong>${CONTEST.ownPull()}</strong></span> &nbsp;vs&nbsp; <span class="tug-opp">${esc(CONTEST.oppName)}: <strong>${CONTEST.oppPull()}</strong></span></div>
+        <p class="lead mt">${reward}</p>
+        <button id="contest-continue-btn" class="mt" style="width:100%;">Continue</button>
+      </div>`;
+    app.insertAdjacentHTML('afterbegin', CONTEST.ropeCardHtml());
+    CONTEST.updateRopeDom();
+    document.getElementById('contest-continue-btn').addEventListener('click', () => {
+      reportCompletion();
+      app.innerHTML = '<div class="card center"><p class="muted">Loading the next part…</p></div>';
+    });
   }
 
   function renderRosterColumns() {
@@ -470,6 +794,7 @@
       const elapsedMs = Math.max(0, Math.min(Date.now(), m.endAt) - m.startAt);
       const { teams, totals } = computeScoreboard(S.roster, m.schedule, S.group, m.correctCount, elapsedMs);
       m.teams = teams; m.totals = totals;
+      if (CONTEST) CONTEST.update('math', m, elapsedMs, 0.4);
       updateMathScoreboardDom();
       updateMathTimerDom();
       if (Date.now() >= m.endAt) {
@@ -545,6 +870,7 @@
     const elapsedMs = Math.max(0, Math.min(Date.now(), m.endAt) - m.startAt);
     const { teams, totals } = computeScoreboard(S.roster, m.schedule, S.group, m.correctCount, elapsedMs);
     m.teams = teams; m.totals = totals;
+    if (CONTEST) CONTEST.update('math', m, elapsedMs, 0);
     updateMathScoreboardDom();
   }
   function updateMathHintDom() {
@@ -570,7 +896,7 @@
       const list = (teams[team] || []).slice().sort((a, b) => a.label - b.label);
       return `
         <div class="team-col ${cls}">
-          <h3>Group ${team}${team === S.group ? ' (your team)' : ''}</h3>
+          <h3>${CONTEST && !CONTEST.isGroup ? (team === S.group ? 'You' : 'Your opponent') : `Group ${team}${team === S.group ? ' (your team)' : ''}`}</h3>
           <div class="team-total">${totals[team] || 0}</div>
           <ul class="member-list">
             ${list.map((p) => `<li class="member-row ${p.isReal ? 'me' : ''}"><span>Participant ${p.label}${p.isReal ? ' (you)' : ''}</span><span class="count">${p.correctCount}</span></li>`).join('')}
@@ -618,6 +944,7 @@
       const elapsedMs = Math.max(0, Math.min(Date.now(), d.endAt) - d.startAt);
       const { teams, totals } = computeScoreboard(S.roster, d.schedule, S.group, d.pairsCompleted, elapsedMs);
       d.teams = teams; d.totals = totals;
+      if (CONTEST) CONTEST.update('diff', d, elapsedMs, 0.4);
       updateDiffScoreboardDom();
       updateDiffTimerDom();
       if (Date.now() >= d.endAt) {
@@ -681,6 +1008,7 @@
     const elapsedMs = Math.max(0, Math.min(Date.now(), d.endAt) - d.startAt);
     const { teams, totals } = computeScoreboard(S.roster, d.schedule, S.group, d.pairsCompleted, elapsedMs);
     d.teams = teams; d.totals = totals;
+    if (CONTEST) CONTEST.update('diff', d, elapsedMs, 0);
     updateDiffScoreboardDom();
   }
 
@@ -769,14 +1097,16 @@
       const elapsedMs = Math.max(0, Math.min(Date.now(), l.endAt) - l.startAt);
       const { teams, totals } = computeScoreboard(S.roster, l.schedule, S.group, l.boardsCompleted, elapsedMs);
       l.teams = teams; l.totals = totals;
+      if (CONTEST) CONTEST.update('link', l, elapsedMs, 0.4);
       updateLinkScoreboardDom();
       updateLinkTimerDom();
       if (Date.now() >= l.endAt) {
         clearInterval(linkTickHandle);
         if (l.helpReceiveHandle) clearTimeout(l.helpReceiveHandle);
         S.phase = 'results';
+        if (CONTEST) CONTEST.finalize();
         render();
-        reportCompletion();
+        if (!CONTEST) reportCompletion(); // contest: reported when the participant clicks Continue
       }
     }, 400);
   }
@@ -852,6 +1182,7 @@
     const elapsedMs = Math.max(0, Math.min(Date.now(), l.endAt) - l.startAt);
     const { teams, totals } = computeScoreboard(S.roster, l.schedule, S.group, l.boardsCompleted, elapsedMs);
     l.teams = teams; l.totals = totals;
+    if (CONTEST) CONTEST.update('link', l, elapsedMs, 0);
     updateLinkScoreboardDom();
   }
 
@@ -973,10 +1304,17 @@
     const linkTeamTotal = linkCombined.totals[S.group] || 0;
     const linkOtherTotal = linkCombined.totals[otherGroup] || 0;
 
-    const overallOwnTeamTotal = Math.round((mathTeamTotal + diffTeamTotal + linkTeamTotal) * 10) / 10;
-    const overallOtherTeamTotal = Math.round((mathOtherTotal + diffOtherTotal + linkOtherTotal) * 10) / 10;
+    let overallOwnTeamTotal = Math.round((mathTeamTotal + diffTeamTotal + linkTeamTotal) * 10) / 10;
+    let overallOtherTeamTotal = Math.round((mathOtherTotal + diffOtherTotal + linkOtherTotal) * 10) / 10;
     let overallOutcome = 'tie';
     if (overallOwnTeamTotal !== overallOtherTeamTotal) overallOutcome = overallOwnTeamTotal > overallOtherTeamTotal ? 'win' : 'lose';
+    // Contest: the winner is decided by the rope (weighted pull), and Task 3
+    // is scored by boards cleared (no speed bonus), consistent with the rope.
+    if (CONTEST) {
+      overallOwnTeamTotal = CONTEST.ownPull();
+      overallOtherTeamTotal = CONTEST.oppPull();
+      overallOutcome = CONTEST.state.realizedOutcome;
+    }
 
     return {
       pid: CONFIG.pid,
@@ -988,7 +1326,9 @@
       diffTeamTotal, diffOtherTeamTotal: diffOtherTotal, diffOutcome,
       diffDurationSec: CONFIG.diffDurationSec,
       linkBoardsCompleted: l.boardsCompleted,
-      linkTeamTotal, linkOtherTeamTotal: linkOtherTotal, linkOutcome,
+      linkTeamTotal: CONTEST ? CONTEST.state.ownUnits.link : linkTeamTotal,
+      linkOtherTeamTotal: CONTEST ? CONTEST.state.oppUnits.link : linkOtherTotal,
+      linkOutcome: CONTEST ? outcomeFor({ [S.group]: CONTEST.state.ownUnits.link, [CONTEST.other]: CONTEST.state.oppUnits.link }, S.group) : linkOutcome,
       linkDurationSec: CONFIG.linkDurationSec,
       overallOwnTeamTotal, overallOtherTeamTotal, overallOutcome,
       mathHelpsGiven: m.helpsGiven, mathHelpsReceived: m.helpsReceived,
@@ -1001,6 +1341,7 @@
       // labels the participant just saw — e.g. for a post-task allocation
       // task that references "Participant 4", "Participant 7", etc.
       roster: S.roster.map((p) => ({ id: p.id, label: p.label, groupLabel: p.groupLabel, isReal: !!p.isReal })),
+      contest: CONTEST ? CONTEST.summary() : null,
     };
   }
 

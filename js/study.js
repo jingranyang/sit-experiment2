@@ -10,15 +10,15 @@
   // Affect / Out-group Affect + comprehension check) -> Debrief -> data
   // submission.
   //
-  // Condition 1 "Group Label" and Condition 3 "Conflict Moderator" reuse the
-  // exact wording from the KU POLS Annual Survey Proposal (Jingran Yang,
-  // July 2026) — Condition 1 = the proposal's "Control" (unlimited
-  // resources) arm, Condition 3 = its "Treatment 1" (fixed 10 gold coins)
-  // arm. Condition 2 "Enhanced Belonging" is the three cooperative
-  // mini-games (with the mutual-help mechanic) already built in game.html —
-  // it is embedded here via <iframe> + postMessage, the same mechanism
-  // documented for Qualtrics in QUALTRICS_INTEGRATION.md, so none of that
-  // already-tested game code has to be touched or duplicated.
+  // Condition 1 "Group Label" reuses the exact wording from the KU POLS
+  // Annual Survey Proposal (Jingran Yang, July 2026) — its "Control"
+  // (unlimited resources) arm. Condition 2 "Enhanced Belonging" is the three
+  // cooperative mini-games (with the mutual-help mechanic) built in
+  // game.html, embedded via <iframe> + postMessage. Condition 3
+  // "Intergroup Conflict Contest" (Experiment 3) embeds the SAME game.html
+  // in contest mode — a zero-sum tug-of-war over the same three tasks —
+  // randomized 2 x 2: group vs. individual contest x win vs. lose. See
+  // STUDY_FLOW.md.
   //
   // NOTE on content that is still a draft pending the researcher's review:
   //   - The consent text and eligibility screen in the Entry stage are
@@ -32,6 +32,10 @@
   // URL parameters:
   //   pid              participant/response ID (default: random)
   //   condition        force '1' | '2' | '3' instead of random assignment
+  //   contestMode      Condition 3: force 'group' | 'individual'
+  //   outcome          Condition 3: force 'win' | 'lose'
+  //   exp3Alloc        Condition 3: 'fixed10' for the fixed-10-coin
+  //                    allocation framing (default 'unlimited')
   //   group            force 'A' | 'B' for the real participant's team
   //   ingroup/outgroup simulated-teammate/opponent counts (default 4 / 5,
   //                    i.e. a 5-vs-5 roster of 10 total, matching the PDF)
@@ -53,6 +57,12 @@
   // =========================================================================
 
   const EXP2_ALLOCATION_MODE = 'unlimited';
+
+  // Experiment 3 (Condition 3, "Intergroup Conflict Contest"): allocation
+  // framing used AFTER the tug-of-war contest. Defaults to 'unlimited' so
+  // the only difference from Experiment 1's no-conflict baseline is the
+  // zero-sum contest itself (not resource scarcity in the allocation).
+  // Override per link with ?exp3Alloc=fixed10.
 
   function esc(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -89,6 +99,10 @@
     dataEndpoint: qs.get('dataEndpoint') || '',
     returnUrl: qs.get('returnUrl') || '',
     disqualifyUrl: qs.get('disqualifyUrl') || '',
+    // Experiment 3 contest settings
+    contestMode: ['group', 'individual'].includes(qs.get('contestMode')) ? qs.get('contestMode') : null,
+    contestOutcome: ['win', 'lose'].includes(qs.get('outcome')) ? qs.get('outcome') : null,
+    exp3AllocMode: qs.get('exp3Alloc') === 'fixed10' ? 'fixed10' : 'unlimited',
     debug: qs.get('debug') === '1',
   };
 
@@ -106,6 +120,9 @@
     label: null,
     roster: null,
     gamePayload: null,
+    contestMode: null,
+    contestOutcome: null,
+    contestPayload: null,
     allocMode: null,
     measures: {
       allocations: {},
@@ -126,6 +143,7 @@
     assigning: 'Step 3 of 6 · Group Assignment',
     task_intro: 'Step 4 of 6 · Task',
     task_game: 'Step 4 of 6 · Task',
+    task_contest: 'Step 4 of 6 · Task',
     measures: 'Step 5 of 6 · Questions',
     debrief: 'Step 6 of 6 · Debrief',
   };
@@ -181,6 +199,7 @@
     if (S.stage === 'assigning') return renderAssigning();
     if (S.stage === 'task_intro') return renderTaskIntro();
     if (S.stage === 'task_game') return renderTaskGame();
+    if (S.stage === 'task_contest') return renderTaskContest();
     if (S.stage === 'measures') return renderMeasures();
     if (S.stage === 'debrief') return renderDebrief();
   }
@@ -304,7 +323,24 @@
       </div>`;
   }
 
-  const CONDITION_NAMES = { 1: 'group_label_control', 2: 'enhanced_belonging', 3: 'conflict_moderator_treatment1' };
+  const CONDITION_NAMES = { 1: 'group_label_control', 2: 'enhanced_belonging', 3: 'intergroup_conflict_contest' };
+
+  // Individual-contest arm: same roster size as the group arm, but nobody
+  // has a group label; one randomly chosen other participant is the
+  // participant's one-on-one contest opponent.
+  function buildUngroupedRoster(total) {
+    const n = Math.max(2, total);
+    const selfIdx = randInt(0, n - 1);
+    let oppIdx = randInt(0, n - 2);
+    if (oppIdx >= selfIdx) oppIdx++;
+    const roster = [];
+    for (let i = 0; i < n; i++) {
+      const label = i + 1;
+      if (i === selfIdx) roster.push({ id: 'self', label, groupLabel: null, isReal: true });
+      else roster.push({ id: 'bot_' + Math.random().toString(36).slice(2, 10), label, groupLabel: null, isReal: false, isOpponent: i === oppIdx });
+    }
+    return { roster, label: selfIdx + 1, opponentLabel: oppIdx + 1 };
+  }
 
   function assignConditionAndRoute() {
     S.condition = CONFIG.forceCondition || randInt(1, 3);
@@ -315,21 +351,35 @@
       S.group = CONFIG.forceGroup === 'A' || CONFIG.forceGroup === 'B' ? CONFIG.forceGroup : (randInt(0, 1) === 0 ? 'A' : 'B');
       S.allocMode = EXP2_ALLOCATION_MODE;
       S.stage = 'task_game';
+    } else if (S.condition === 3) {
+      S.contestMode = CONFIG.contestMode || (randInt(0, 1) === 0 ? 'group' : 'individual');
+      S.contestOutcome = CONFIG.contestOutcome || (randInt(0, 1) === 0 ? 'win' : 'lose');
+      if (S.contestMode === 'group') {
+        S.group = CONFIG.forceGroup === 'A' || CONFIG.forceGroup === 'B' ? CONFIG.forceGroup : (randInt(0, 1) === 0 ? 'A' : 'B');
+      } else {
+        const built = buildUngroupedRoster(1 + CONFIG.inGroupCount + CONFIG.outGroupCount);
+        S.roster = built.roster;
+        S.group = null;
+        S.label = built.label;
+        S.opponentLabel = built.opponentLabel;
+      }
+      S.allocMode = CONFIG.exp3AllocMode;
+      S.stage = 'task_contest';
     } else {
       const built = buildTenPersonRoster(CONFIG.inGroupCount, CONFIG.outGroupCount, CONFIG.forceGroup);
       S.roster = built.roster;
       S.group = built.group;
       S.label = built.label;
-      S.allocMode = S.condition === 1 ? 'unlimited' : 'fixed10';
+      S.allocMode = 'unlimited';
       S.stage = 'task_intro';
     }
     render();
   }
 
   // =======================================================================
-  // Condition 1 (Group Label / Control) and Condition 3 (Conflict Moderator
-  // / Treatment 1) task-intro screens — exact wording from KU POLS proposal
-  // sections 5.1 and 5.2 respectively.
+  // Condition 1 (Group Label / Control) task-intro screen — exact wording
+  // from KU POLS proposal section 5.1. (The fixed-10 wording from 5.2 is
+  // kept here for reuse, though Condition 3 no longer routes through it.)
   // =======================================================================
   function renderTaskIntro() {
     const unlimited = S.allocMode === 'unlimited';
@@ -391,15 +441,71 @@
       </div>`;
   }
 
+  // =======================================================================
+  // Condition 3 (Intergroup Conflict Contest) — the tug-of-war contest in
+  // js/contest.js, run in-page. 2 x 2 within this condition: contest mode
+  // (group vs. individual) x assigned outcome (win vs. lose).
+  // =======================================================================
+  function renderTaskContest() {
+    // Same game.html as Condition 2 (identical three tasks, help mechanic,
+    // durations and difficulty), switched into contest mode.
+    const params = new URLSearchParams({
+      pid: S.pid,
+      contest: S.contestMode,
+      outcome: S.contestOutcome,
+      duration: String(CONFIG.durationSec),
+      difficulty: CONFIG.difficulty,
+      diffDuration: String(CONFIG.diffDurationSec),
+      diffDifficulty: CONFIG.diffDifficulty,
+      linkDuration: String(CONFIG.linkDurationSec),
+      linkDifficulty: CONFIG.linkDifficulty,
+      helpThreshold: String(CONFIG.helpThreshold),
+      origin: location.origin,
+    });
+    if (S.contestMode === 'group') {
+      params.set('group', S.group);
+      params.set('ingroup', String(CONFIG.inGroupCount));
+      params.set('outgroup', String(CONFIG.outGroupCount));
+    } else {
+      params.set('selfLabel', String(S.label));
+      params.set('oppLabel', String(S.opponentLabel));
+    }
+    if (!CONFIG.helpEnabled) params.set('help', '0');
+    if (qs.get('helpReceiveInterval')) params.set('helpReceiveInterval', qs.get('helpReceiveInterval'));
+    if (CONFIG.debug) params.set('debug', '1');
+
+    app.innerHTML = `
+      ${progressBarHtml()}
+      <div class="card">
+        <iframe id="game-frame" src="game.html?${params.toString()}" width="100%" height="1150" style="border:none; border-radius:10px; background:var(--color-panel-2);"></iframe>
+      </div>`;
+  }
+
   // One persistent listener for the whole page lifetime; only acts while
   // we're actually on the task_game stage and the message really is a
   // completion payload from our own iframe.
   window.addEventListener('message', (event) => {
-    if (S.stage !== 'task_game') return;
+    if (S.stage !== 'task_game' && S.stage !== 'task_contest') return;
     if (!event.data || event.data.type !== 'sit_task_complete') return;
     const frame = document.getElementById('game-frame');
     if (frame && event.source !== frame.contentWindow) return;
     const payload = event.data.payload;
+    if (S.stage === 'task_contest') {
+      // Group arm: allocate over the exact roster just played with. The
+      // individual arm keeps its own 10-person ungrouped roster (built at
+      // assignment) whose self/opponent labels were passed into the game.
+      S.contestPayload = payload;
+      if (S.contestMode === 'group' && Array.isArray(payload.roster) && payload.roster.length) {
+        S.roster = payload.roster;
+        const self = S.roster.find((p) => p.isReal);
+        S.label = self ? self.label : S.label;
+      }
+      S.timestamps.measuresStartAt = nowIso();
+      S.stage = 'measures';
+      render();
+      window.scrollTo(0, 0);
+      return;
+    }
     S.gamePayload = payload;
     S.roster = Array.isArray(payload.roster) && payload.roster.length
       ? payload.roster
@@ -414,9 +520,18 @@
   // =======================================================================
   // Shared Outcome Measures stage (all three conditions converge here)
   // =======================================================================
+  function measuresCtx() {
+    const ctx = { roster: S.roster, group: S.group };
+    if (S.condition === 3) {
+      ctx.contest = { mode: S.contestMode, outcome: S.contestPayload && S.contestPayload.contest ? S.contestPayload.contest.realizedOutcome : S.contestOutcome };
+      if (S.contestMode === 'individual') ctx.individual = { opponentLabel: S.opponentLabel };
+    }
+    return ctx;
+  }
+
   function renderMeasures() {
-    app.innerHTML = progressBarHtml() + window.OutcomeMeasures.renderHtml(S.allocMode, { roster: S.roster, group: S.group });
-    window.OutcomeMeasures.attachListeners(S.allocMode, { roster: S.roster, group: S.group }, S.measures, () => {
+    app.innerHTML = progressBarHtml() + window.OutcomeMeasures.renderHtml(S.allocMode, measuresCtx());
+    window.OutcomeMeasures.attachListeners(S.allocMode, measuresCtx(), S.measures, () => {
       S.timestamps.debriefAt = nowIso();
       S.stage = 'debrief';
       submitResults();
@@ -430,9 +545,14 @@
   // computer-simulated (consistent with game.html's own deception design).
   // =======================================================================
   function renderDebrief() {
-    const botNote = S.condition === 2
-      ? '<p>In the task you just completed, your teammates and opponents ("Participant 2", "Participant 3", etc.) were simulated by the computer, not real people. This was necessary so that every participant could have the same experience regardless of when they took part.</p>'
-      : '';
+    let botNote = '';
+    if (S.condition === 2) {
+      botNote = '<p>In the task you just completed, your teammates and opponents ("Participant 2", "Participant 3", etc.) were simulated by the computer, not real people. This was necessary so that every participant could have the same experience regardless of when they took part.</p>';
+    } else if (S.condition === 3) {
+      const who = S.contestMode === 'group' ? 'your teammates, the opposing team, and the team chat messages' : 'your opponent';
+      botNote = `<p>In the contest you just completed, ${who} were simulated by the computer, not real people. The result of the contest (whether you won or lost) was also determined in advance by random assignment and did not depend on how well you performed. This was necessary so that we could study how winning or losing a competition affects people's decisions.</p>
+        <p>[Bonus payment note — add before fielding: e.g. all participants receive the bonus regardless of the contest result.]</p>`;
+    }
     app.innerHTML = `
       ${progressBarHtml()}
       <div class="card">
@@ -468,9 +588,9 @@
   // Data submission
   // =======================================================================
   function buildFinalPayload() {
-    const comprehension = window.OutcomeMeasures.correctness(S.allocMode, S.measures.comprehension);
+    const comprehension = window.OutcomeMeasures.correctness(S.allocMode, S.measures.comprehension, measuresCtx());
     const allocEntries = (S.roster || []).map((p) => ({
-      label: p.label, groupLabel: p.groupLabel, isSelf: !!p.isReal,
+      label: p.label, groupLabel: p.groupLabel, isSelf: !!p.isReal, isOpponent: !!p.isOpponent,
       allocation: Object.prototype.hasOwnProperty.call(S.measures.allocations, p.label) ? S.measures.allocations[p.label] : null,
     }));
     const allocTotal = allocEntries.reduce((sum, e) => sum + (e.allocation === '0' || e.allocation === '1' || e.allocation === '2' ? Number(e.allocation) : 0), 0);
@@ -482,16 +602,25 @@
       participantLabel: S.label,
       rosterSize: {
         total: (S.roster || []).length,
-        inGroup: (S.roster || []).filter((p) => p.groupLabel === S.group).length,
-        outGroup: (S.roster || []).filter((p) => p.groupLabel !== S.group).length,
+        inGroup: S.group ? (S.roster || []).filter((p) => p.groupLabel === S.group).length : null,
+        outGroup: S.group ? (S.roster || []).filter((p) => p.groupLabel !== S.group).length : null,
       },
       consentAgreedAt: S.consent.agreedAt,
       eligibility: S.eligibility,
       demographics: S.demographics,
-      game: S.gamePayload,
+      // Condition 2 and Condition 3 both carry game.html's full result
+      // payload here; for Condition 3, `contest` additionally lifts out the
+      // contest summary (outcome, rope pulls, lead changes, chat log).
+      game: S.gamePayload || S.contestPayload,
+      contestMode: S.contestMode,
+      contestOutcomeAssigned: S.contestOutcome,
+      contest: S.contestPayload ? S.contestPayload.contest : null,
       allocationMode: S.allocMode,
       allocation: { entries: allocEntries, total: allocTotal },
-      identification: S.measures.identification,
+      // In the Experiment 3 individual arm there is no group: identification
+      // is null, ingroupAffect = feelings toward the other (non-opponent)
+      // participants, outgroupAffect = feelings toward the contest opponent.
+      identification: S.condition === 3 && S.contestMode === 'individual' ? null : S.measures.identification,
       ingroupAffect: S.measures.ingroupAffect,
       outgroupAffect: S.measures.outgroupAffect,
       comprehension,

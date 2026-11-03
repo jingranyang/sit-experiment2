@@ -193,3 +193,48 @@ code.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; backgro
 .alloc-opt input { accent-color: var(--color-accent); }
 
 .error-text { color: var(--color-bad); font-size: 0.85rem; margin-top: 10px; }
+
+/* ------------------------------------------------------------------ */
+/* Experiment 3: tug-of-war contest, preset-message team chat.         */
+/* ------------------------------------------------------------------ */
+
+.contest-top { position: sticky; top: 8px; z-index: 5; padding: 14px 18px; }
+.tug-labels { display: flex; justify-content: space-between; font-weight: 700; font-size: 0.9rem; margin-bottom: 6px; }
+.tug-own { color: var(--color-a); }
+.tug-opp { color: var(--color-b); }
+.tug-track { position: relative; height: 46px; border-radius: 10px; overflow: hidden; background: var(--color-panel-2); }
+.tug-zone { position: absolute; top: 0; bottom: 0; width: 50%; }
+.tug-zone.own { left: 0; background: linear-gradient(90deg, rgba(79,140,255,0.28), rgba(79,140,255,0.04)); }
+.tug-zone.opp { right: 0; background: linear-gradient(270deg, rgba(255,122,89,0.28), rgba(255,122,89,0.04)); }
+.tug-center { position: absolute; left: 50%; top: 4px; bottom: 4px; width: 2px; background: rgba(255,255,255,0.35); transform: translateX(-1px); }
+.tug-rope { position: absolute; left: 4%; right: 4%; top: 50%; height: 6px; transform: translateY(-50%); border-radius: 3px;
+  background: repeating-linear-gradient(45deg, #c9a46a 0 6px, #a9824a 6px 12px); }
+.tug-knot { position: absolute; left: 50%; top: 50%; width: 22px; height: 22px; border-radius: 50%;
+  background: #ffd166; border: 3px solid #2a2109; transform: translate(-50%, -50%); transition: left 0.6s ease; }
+.tug-scores { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
+.tug-score { font-size: 1.7rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+.tug-score.own { color: var(--color-a); }
+.tug-score.opp { color: var(--color-b); }
+.tug-status { font-size: 0.88rem; font-weight: 600; color: var(--color-muted); text-align: center; }
+.tug-status.ahead { color: var(--color-good); }
+.tug-status.behind { color: var(--color-bad); }
+.final-score { font-size: 1.1rem; margin-top: 10px; }
+
+.answer-input {
+  font: inherit; font-size: 1.3rem; width: 100%; text-align: center; padding: 10px; border-radius: 10px;
+  border: 1px solid var(--color-border); background: var(--color-panel-2); color: var(--color-text);
+}
+
+.chat-feed {
+  max-height: 180px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px;
+  background: var(--color-panel-2); border-radius: 10px; padding: 10px;
+}
+.chat-msg { display: flex; flex-direction: column; align-self: flex-start; max-width: 85%;
+  background: rgba(255,255,255,0.05); border-radius: 10px; padding: 6px 10px; font-size: 0.88rem; }
+.chat-msg.me { align-self: flex-end; background: var(--color-a-dim); }
+.chat-who { font-size: 0.72rem; color: var(--color-muted); margin-bottom: 2px; }
+.chat-msg.me .chat-who { color: #cfe0ff; }
+.chat-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.chat-preset-btn { background: var(--color-panel-2); border: 1px solid var(--color-border); color: var(--color-text);
+  padding: 7px 12px; font-size: 0.82rem; font-weight: 500; border-radius: 999px; }
+.chat-preset-btn:hover { border-color: var(--color-accent); }

@@ -70,8 +70,30 @@ window.OutcomeMeasures = (function () {
     },
   ];
 
-  function comprehensionFor(mode) {
-    return mode === 'fixed10' ? FIXED10_COMPREHENSION : UNLIMITED_COMPREHENSION;
+  // Extra checks appended in Experiment 3 (tug-of-war contest): the
+  // winner-take-all reward rule, and recall of the contest outcome (a
+  // manipulation check for the randomized win/lose outcome).
+  function contestComprehension(contest) {
+    const outcomeText = contest.outcome === 'win' ? 'Won' : 'Lost';
+    return [
+      {
+        id: 'qc1',
+        prompt: 'In the contest you just completed, who received the bonus reward?',
+        options: ['Only the winning side', 'Both sides', 'Everyone who answered at least one question correctly'],
+        correct: 'Only the winning side',
+      },
+      {
+        id: 'qc2',
+        prompt: contest.mode === 'group' ? 'In the contest you just completed, your team:' : 'In the contest you just completed, you:',
+        options: ['Won', 'Lost', 'Not sure'],
+        correct: outcomeText,
+      },
+    ];
+  }
+
+  function comprehensionFor(mode, ctx) {
+    const base = mode === 'fixed10' ? FIXED10_COMPREHENSION : UNLIMITED_COMPREHENSION;
+    return ctx && ctx.contest ? base.concat(contestComprehension(ctx.contest)) : base;
   }
 
   // Own-group members first (self first within that), then the other
@@ -79,6 +101,12 @@ window.OutcomeMeasures = (function () {
   // group) allocation table.
   function orderedRoster(roster) {
     const self = roster.find((p) => p.isReal);
+    if (roster.every((p) => !p.groupLabel)) {
+      // Ungrouped roster (Experiment 3 individual-contest arm): self, then
+      // the contest opponent, then everyone else.
+      const rank = (p) => (p.isReal ? 0 : p.isOpponent ? 1 : 2);
+      return roster.slice().sort((a, b) => rank(a) - rank(b) || a.label - b.label);
+    }
     const ownGroup = self ? self.groupLabel : null;
     const mine = roster.filter((p) => p.groupLabel === ownGroup).sort((a, b) => (a.isReal ? -1 : b.isReal ? 1 : a.label - b.label));
     const others = roster.filter((p) => p.groupLabel !== ownGroup).sort((a, b) => a.label - b.label);
@@ -87,6 +115,7 @@ window.OutcomeMeasures = (function () {
 
   function renderHtml(mode, ctx) {
     const { roster, group } = ctx;
+    const individual = !!ctx.individual;
     const self = roster.find((p) => p.isReal);
     const otherGroup = group === 'A' ? 'B' : 'A';
     const ownCount = roster.filter((p) => p.groupLabel === group).length;
@@ -99,11 +128,11 @@ window.OutcomeMeasures = (function () {
 
     const optLabels = { '0': '0 gold coins', '1': '1 gold coin', '2': '2 gold coins', cannot: 'Cannot decide' };
     const rowsHtml = rows.map((p) => {
-      const name = `Participant ${esc(p.label)}${p.isReal ? ' (you)' : ''}`;
+      const name = `Participant ${esc(p.label)}${p.isReal ? ' (you)' : p.isOpponent ? ' (your opponent in the contest)' : ''}`;
       const groupText = `Group ${esc(p.groupLabel)}${p.groupLabel === group ? ' (your group)' : ''}`;
       return `<tr>
         <td>${name}</td>
-        <td>${groupText}</td>
+        ${individual ? '' : `<td>${groupText}</td>`}
         <td class="alloc-options">
           ${['0', '1', '2', 'cannot'].map((o) => `<label class="alloc-opt"><input type="radio" name="alloc-${p.label}" value="${o}" data-alloc-label="${p.label}" /> ${optLabels[o]}</label>`).join('')}
         </td>
@@ -119,7 +148,7 @@ window.OutcomeMeasures = (function () {
         <div class="slider-anchors"><span>${esc(leftLabel)} (-50)</span><span>Neutral (0)</span><span>${esc(rightLabel)} (50)</span></div>
       </div>`;
 
-    const comprehensionHtml = comprehensionFor(mode).map((q) => `
+    const comprehensionHtml = comprehensionFor(mode, ctx).map((q) => `
       <div class="measure-block">
         <h3>${esc(q.prompt)}</h3>
         <div class="radio-group" data-comp-id="${q.id}">
@@ -130,18 +159,30 @@ window.OutcomeMeasures = (function () {
     return `
       <div class="card">
         <h2>Question 1 — Allocation Task</h2>
-        <p>Your ID: Participant ${esc(self.label)} &nbsp;·&nbsp; Your assigned group: Group ${esc(group)}</p>
-        <p class="muted">There are ${roster.length} participants in this task (including yourself). Your group (Group ${esc(group)}) consists of ${ownCount} member(s) (including yourself), and the other ${otherCount} participant(s) belong to Group ${esc(otherGroup)}.</p>
+        ${individual
+          ? `<p>Your ID: Participant ${esc(self.label)}</p>
+        <p class="muted">There are ${roster.length} participants in this task (including yourself). Participant ${esc(ctx.individual.opponentLabel)} was your opponent in the contest.</p>`
+          : `<p>Your ID: Participant ${esc(self.label)} &nbsp;·&nbsp; Your assigned group: Group ${esc(group)}</p>
+        <p class="muted">There are ${roster.length} participants in this task (including yourself). Your group (Group ${esc(group)}) consists of ${ownCount} member(s) (including yourself), and the other ${otherCount} participant(s) belong to Group ${esc(otherGroup)}.</p>`}
         <p>${esc(allocIntro)}</p>
         <div style="overflow-x:auto;">
         <table class="alloc-table">
-          <thead><tr><th>Participant</th><th>Group</th><th>Allocation</th></tr></thead>
+          <thead><tr><th>Participant</th>${individual ? '' : '<th>Group</th>'}<th>Allocation</th></tr></thead>
           <tbody>${rowsHtml}</tbody>
         </table>
         </div>
         ${mode === 'fixed10' ? `<p class="mt" id="alloc-total-line">Total allocated so far: <strong id="alloc-total">0</strong> / 10</p>` : ''}
         <p class="error-text hidden" id="alloc-error">Please answer for every participant${mode === 'fixed10' ? ', and keep the total at 10 or below' : ''}.</p>
       </div>
+      ${individual ? `
+      <div class="card">
+        <h2>Question 2 — Feelings Toward Other Participants</h2>
+        ${sliderBlock('ingroupAffect', 'How do you feel toward the other participants in this study (other than your contest opponent)?', 'Please rate based on your true feelings.', 'Very unfavorable', 'Very favorable')}
+      </div>
+      <div class="card">
+        <h2>Question 3 — Feelings Toward Your Opponent</h2>
+        ${sliderBlock('outgroupAffect', `How do you feel toward your opponent in the contest (Participant ${ctx.individual.opponentLabel})?`, 'Please rate based on your true feelings.', 'Very unfavorable', 'Very favorable')}
+      </div>` : `
       <div class="card">
         <h2>Question 2 — Group Identification</h2>
         ${sliderBlock('identification', `To what extent do you identify with your group (Group ${group})?`, '"Identify" means that you feel you belong to this group and associate yourself with it to some extent. Please rate based on your true feelings.', 'Do not identify at all', 'Very strong identification')}
@@ -153,7 +194,7 @@ window.OutcomeMeasures = (function () {
       <div class="card">
         <h2>Question 4 — Out-Group Affect</h2>
         ${sliderBlock('outgroupAffect', `How do you feel toward members of the other group (Group ${otherGroup})?`, 'Please rate based on your true feelings.', 'Very unfavorable', 'Very favorable')}
-      </div>
+      </div>`}
       <div class="card">
         <h2>Comprehension Check</h2>
         <p class="muted">To confirm that you understand the rules of this task, please answer the following questions.</p>
@@ -218,12 +259,12 @@ window.OutcomeMeasures = (function () {
         return;
       }
       if (err) err.classList.add('hidden');
-      const allSlidersTouched = state.identificationTouched && state.ingroupAffectTouched && state.outgroupAffectTouched;
+      const allSlidersTouched = (ctx.individual || state.identificationTouched) && state.ingroupAffectTouched && state.outgroupAffectTouched;
       if (!allSlidersTouched) {
-        alert('Please move each slider (Questions 2-4) to record your answer before continuing.');
+        alert('Please move each slider to record your answer before continuing.');
         return;
       }
-      const allComprehension = comprehensionFor(mode).every((q) => state.comprehension[q.id] !== undefined);
+      const allComprehension = comprehensionFor(mode, ctx).every((q) => state.comprehension[q.id] !== undefined);
       if (!allComprehension) {
         alert('Please answer the comprehension-check questions before continuing.');
         return;
@@ -232,9 +273,9 @@ window.OutcomeMeasures = (function () {
     });
   }
 
-  function correctness(mode, comprehension) {
+  function correctness(mode, comprehension, ctx) {
     const out = {};
-    comprehensionFor(mode).forEach((q) => {
+    comprehensionFor(mode, ctx).forEach((q) => {
       const answer = comprehension[q.id];
       out[q.id] = { prompt: q.prompt, answer: answer || null, correct: answer === q.correct };
     });

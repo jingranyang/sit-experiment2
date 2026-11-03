@@ -12,18 +12,22 @@ The three experimental conditions:
 
 1. **Group Label** (control) — participants are just told their group (A or B) and asked to allocate an *unlimited* supply of gold coins among the 10 participants in their round. No conflict, no game — isolates the effect of group identity alone.
 2. **Enhanced Belonging** — the three cooperative mini-games (Cooperative Calculation, Spot the Difference, Match Pairs), including the mutual-help mechanic, embedded as an iframe. Tests whether actively *reinforcing* group belonging changes the identity effect.
-3. **Conflict Moderator** (treatment) — same as condition 1, except the 10 gold coins are *fixed*, so allocating more to one participant reduces what's left for others. Isolates the effect of adding real intergroup conflict on top of group identity.
+3. **Intergroup Conflict Contest** (Experiment 3) — the *same three games* as condition 2 (`game.html`), switched into contest mode: a winner-take-all, zero-sum **tug-of-war** shown at the top of every task screen, where each side's pull is the number of problems it solves. Within this condition, participants are randomized 2 × 2:
+   - **Group** (treatment) vs. **Individual** (control) contest. Group = 5-vs-5 teams with the mutual-help mechanic and a team chat restricted to 5 preset, in-group-encouragement-only messages. Individual = the same contest one-on-one against a single opponent, with no group label, no teammates, no help and no chat.
+   - **Win** vs. **Lose**. The opposing side is computer-driven: it follows a fixed lead-change script (identical for everyone) so the lead swings back and forth, and the contest ends in a close win or a close loss as assigned.
 
-Conditions 1 and 3's instructions, allocation task, identification/affect scales, and comprehension-check questions use the exact wording from the KU POLS proposal (sections 5.1/5.2). The consent text in the Entry stage is **placeholder language only** — it has not been IRB-reviewed; replace it before fielding a real study (see the in-page warning banner and comments at the top of `js/study.js`).
+   Then the same Allocation Task and measures (in the individual arm the table has no Group column, the identification question is skipped, and the affect questions ask about the other participants vs. the contest opponent). See [STUDY_FLOW.md](./STUDY_FLOW.md) for details.
+
+Condition 1's instructions, and the allocation task, identification/affect scales, and comprehension-check questions, use the exact wording from the KU POLS proposal (sections 5.1/5.2). The previous fixed-10-coin allocation framing is still available for condition 3 with `?exp3Alloc=fixed10`. The consent text in the Entry stage is **placeholder language only** — it has not been IRB-reviewed; replace it before fielding a real study (see the in-page warning banner and comments at the top of `js/study.js`).
 
 - Supported URL parameters, the final data payload shape, and all assumptions worth double-checking: see [STUDY_FLOW.md](./STUDY_FLOW.md)
 - Saving results to Google Sheets: see [GOOGLE_SHEETS_SETUP.md](./GOOGLE_SHEETS_SETUP.md)
-- Local testing: `node test/static_server.js`, then open `http://localhost:8099/?debug=1` (add `&condition=1`, `2`, or `3` to force a specific arm instead of random assignment)
-- Automated tests: with the static server running, `node test/playwright_check.js` — covers the three-game engine itself *and* the full Entry → Debrief flow for all three conditions, including the Condition-3 allocation-cap validation and the Condition-2 iframe hand-off.
+- Local testing: `node test/static_server.js`, then open `http://localhost:8099/?debug=1` (add `&condition=1`, `2`, or `3` to force a specific arm instead of random assignment; for condition 3 also `&contestMode=group|individual&outcome=win|lose`)
+- Automated tests: with the static server running, `node test/playwright_check.js` — covers the three-game engine itself *and* the full Entry → Debrief flow for all three conditions, including all four Condition-3 contest arms (outcome manipulation, lead changes, preset-only chat, help, payload) and the Condition-2 iframe hand-off.
 
 ## `game.html` — the three games on their own (legacy / Qualtrics-embed use)
 
-The original single-page version of just the three cooperative mini-games (Cooperative Calculation, Spot the Difference, Match Pairs, with the mutual-help mechanic), unchanged. `index.html`'s Condition 2 embeds this exact page via iframe. It's also still fully usable on its own if you ever want to run *just* the games embedded in Qualtrics (or anywhere else) instead of the full study flow above — see [QUALTRICS_INTEGRATION.md](./QUALTRICS_INTEGRATION.md) for that integration path, its URL parameters, and the result fields it produces.
+The original single-page version of just the three cooperative mini-games (Cooperative Calculation, Spot the Difference, Match Pairs, with the mutual-help mechanic), unchanged. `index.html`'s Conditions 2 and 3 both embed this exact page via iframe (Condition 3 adds `contest=group|individual&outcome=win|lose`; without those parameters the page behaves exactly as before). It's also still fully usable on its own if you ever want to run *just* the games embedded in Qualtrics (or anywhere else) instead of the full study flow above — see [QUALTRICS_INTEGRATION.md](./QUALTRICS_INTEGRATION.md) for that integration path, its URL parameters, and the result fields it produces.
 
 ## `server-version/`: full standalone version with its own backend
 
