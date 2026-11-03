@@ -238,3 +238,7 @@ code.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; backgro
 .chat-preset-btn { background: var(--color-panel-2); border: 1px solid var(--color-border); color: var(--color-text);
   padding: 7px 12px; font-size: 0.82rem; font-weight: 500; border-radius: 999px; }
 .chat-preset-btn:hover { border-color: var(--color-accent); }
+.tug-round { text-align: center; font-size: 0.78rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--color-muted); margin-bottom: 6px; }
+.tug-points { text-align: center; font-size: 0.85rem; color: var(--color-muted); margin-top: 8px; }
+.tug-points strong { color: var(--color-text); }
+.rules-list { margin: 8px 0 0; padding-left: 20px; line-height: 1.55; }

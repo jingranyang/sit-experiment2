@@ -71,20 +71,20 @@ window.OutcomeMeasures = (function () {
   ];
 
   // Extra checks appended in Experiment 3 (tug-of-war contest): the
-  // winner-take-all reward rule, and recall of the contest outcome (a
-  // manipulation check for the randomized win/lose outcome).
+  // winner-takes-all rule of the final round, and recall of the final
+  // round's result (a manipulation check for the randomized outcome).
   function contestComprehension(contest) {
     const outcomeText = contest.outcome === 'win' ? 'Won' : 'Lost';
     return [
       {
         id: 'qc1',
-        prompt: 'In the contest you just completed, who received the bonus reward?',
-        options: ['Only the winning side', 'Both sides', 'Everyone who answered at least one question correctly'],
-        correct: 'Only the winning side',
+        prompt: 'In the final round of the contest, what happened to the losing side\'s points?',
+        options: ['The winning side took all of them', 'The losing side kept them', 'They were shared equally between both sides'],
+        correct: 'The winning side took all of them',
       },
       {
         id: 'qc2',
-        prompt: contest.mode === 'group' ? 'In the contest you just completed, your team:' : 'In the contest you just completed, you:',
+        prompt: contest.mode === 'group' ? 'In the final round of the contest, your team:' : 'In the final round of the contest, you:',
         options: ['Won', 'Lost', 'Not sure'],
         correct: outcomeText,
       },

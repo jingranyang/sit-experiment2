@@ -33,7 +33,8 @@
   //   pid              participant/response ID (default: random)
   //   condition        force '1' | '2' | '3' instead of random assignment
   //   contestMode      Condition 3: force 'group' | 'individual'
-  //   outcome          Condition 3: force 'win' | 'lose'
+  //   outcome          Condition 3: force the final round's result 'win' | 'lose'
+  //   order            Condition 3: force Rounds 1-2 order 'WL' | 'LW'
   //   exp3Alloc        Condition 3: 'fixed10' for the fixed-10-coin
   //                    allocation framing (default 'unlimited')
   //   group            force 'A' | 'B' for the real participant's team
@@ -102,6 +103,7 @@
     // Experiment 3 contest settings
     contestMode: ['group', 'individual'].includes(qs.get('contestMode')) ? qs.get('contestMode') : null,
     contestOutcome: ['win', 'lose'].includes(qs.get('outcome')) ? qs.get('outcome') : null,
+    contestOrder: ['WL', 'LW'].includes((qs.get('order') || '').toUpperCase()) ? qs.get('order').toUpperCase() : null,
     exp3AllocMode: qs.get('exp3Alloc') === 'fixed10' ? 'fixed10' : 'unlimited',
     debug: qs.get('debug') === '1',
   };
@@ -122,6 +124,7 @@
     gamePayload: null,
     contestMode: null,
     contestOutcome: null,
+    contestOrder: null,
     contestPayload: null,
     allocMode: null,
     measures: {
@@ -353,7 +356,10 @@
       S.stage = 'task_game';
     } else if (S.condition === 3) {
       S.contestMode = CONFIG.contestMode || (randInt(0, 1) === 0 ? 'group' : 'individual');
+      // Final (Round 3, winner-takes-all) result: randomized 50/50.
       S.contestOutcome = CONFIG.contestOutcome || (randInt(0, 1) === 0 ? 'win' : 'lose');
+      // Rounds 1-2 are always one win and one loss; order counterbalanced.
+      S.contestOrder = CONFIG.contestOrder || (randInt(0, 1) === 0 ? 'WL' : 'LW');
       if (S.contestMode === 'group') {
         S.group = CONFIG.forceGroup === 'A' || CONFIG.forceGroup === 'B' ? CONFIG.forceGroup : (randInt(0, 1) === 0 ? 'A' : 'B');
       } else {
@@ -453,6 +459,7 @@
       pid: S.pid,
       contest: S.contestMode,
       outcome: S.contestOutcome,
+      order: S.contestOrder,
       duration: String(CONFIG.durationSec),
       difficulty: CONFIG.difficulty,
       diffDuration: String(CONFIG.diffDurationSec),
@@ -550,8 +557,8 @@
       botNote = '<p>In the task you just completed, your teammates and opponents ("Participant 2", "Participant 3", etc.) were simulated by the computer, not real people. This was necessary so that every participant could have the same experience regardless of when they took part.</p>';
     } else if (S.condition === 3) {
       const who = S.contestMode === 'group' ? 'your teammates, the opposing team, and the team chat messages' : 'your opponent';
-      botNote = `<p>In the contest you just completed, ${who} were simulated by the computer, not real people. The result of the contest (whether you won or lost) was also determined in advance by random assignment and did not depend on how well you performed. This was necessary so that we could study how winning or losing a competition affects people's decisions.</p>
-        <p>[Bonus payment note — add before fielding: e.g. all participants receive the bonus regardless of the contest result.]</p>`;
+      botNote = `<p>In the contest you just completed, ${who} were simulated by the computer, not real people. The results of all three rounds (and therefore the points you ended with) were also determined in advance by random assignment and did not depend on how well you performed. This was necessary so that we could study how winning or losing a competition affects people's decisions.</p>
+        <p>[Bonus payment note — add before fielding: e.g. how contest points translate into payment, and that all participants are paid the same regardless of the contest result.]</p>`;
     }
     app.innerHTML = `
       ${progressBarHtml()}
@@ -614,6 +621,7 @@
       game: S.gamePayload || S.contestPayload,
       contestMode: S.contestMode,
       contestOutcomeAssigned: S.contestOutcome,
+      contestOrder: S.contestOrder,
       contest: S.contestPayload ? S.contestPayload.contest : null,
       allocationMode: S.allocMode,
       allocation: { entries: allocEntries, total: allocTotal },

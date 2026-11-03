@@ -62,8 +62,12 @@
   //                  three tasks into a zero-sum tug-of-war contest (see the
   //                  CONTEST section below). Omit for Experiment 2 — the
   //                  page then behaves exactly as before.
-  //   outcome        Experiment 3 only: 'win' | 'lose' — the contest result
-  //                  the participant will experience (randomized upstream).
+  //   outcome        Experiment 3 only: 'win' | 'lose' — the result of the
+  //                  final round (Round 3, winner takes all), randomized
+  //                  upstream.
+  //   order          Experiment 3 only: 'WL' | 'LW' — Rounds 1-2 are always
+  //                  one win and one loss; this sets which comes first
+  //                  (counterbalanced upstream).
   //   selfLabel / oppLabel  Experiment 3 individual arm only: the
   //                  participant's and the opponent's "Participant N"
   //                  labels, so they match the outer study's roster.
@@ -120,7 +124,8 @@
     autostart: qs.get('autostart') === '1',
     debug: qs.get('debug') === '1',
     contest: ['group', 'individual'].includes(qs.get('contest')) ? qs.get('contest') : null,
-    contestOutcome: qs.get('outcome') === 'win' ? 'win' : 'lose',
+    contestOutcome: qs.get('outcome') === 'win' ? 'win' : 'lose', // final (Round 3) result
+    contestOrder: qs.get('order') === 'LW' ? 'LW' : 'WL',          // Rounds 1-2: win-then-lose or lose-then-win
     selfLabel: clampInt(qs.get('selfLabel'), 0, 0, 999),
     oppLabel: clampInt(qs.get('oppLabel'), 0, 0, 999),
   };
@@ -259,7 +264,7 @@
     phase: 'intro', // intro | math | math_done | diff | diff_done | link | results
     math: Object.assign({ schedule: null, correctCount: 0, currentProblem: null, lastAnswerResult: null, startAt: null, endAt: null, teams: { A: [], B: [] }, totals: { A: 0, B: 0 } }, freshHelpState()),
     diff: Object.assign({ schedule: null, pairsCompleted: 0, round: null, foundInRound: 0, startAt: null, endAt: null, teams: { A: [], B: [] }, totals: { A: 0, B: 0 }, hintDiffIndex: null }, freshHelpState()),
-    link: Object.assign({ schedule: null, board: null, boardsCompleted: 0, selected: null, completionTimestamps: [], startAt: null, endAt: null, teams: { A: [], B: [] }, totals: { A: 0, B: 0 }, hintPair: null }, freshHelpState()),
+    link: Object.assign({ schedule: null, board: null, boardsCompleted: 0, pairsCleared: 0, selected: null, completionTimestamps: [], startAt: null, endAt: null, teams: { A: [], B: [] }, totals: { A: 0, B: 0 }, hintPair: null }, freshHelpState()),
   };
 
   // A small fixed toast that lives outside #app so it survives full-screen
@@ -288,7 +293,9 @@
   function taskProgressCount(taskKey) {
     if (taskKey === 'math') return S.math.correctCount;
     if (taskKey === 'diff') return S.diff.pairsCompleted;
-    return S.link.boardsCompleted;
+    // Contest: Match Pairs is scored per matched pair (finer-grained, so the
+    // rope moves with every match); Experiment 2 keeps per-board scoring.
+    return CONFIG.contest ? S.link.pairsCleared : S.link.boardsCompleted;
   }
   function pushHelpFeed(taskKey, text) {
     const t = S[taskKey];
@@ -437,27 +444,39 @@
 
 
   // =======================================================================
-  // CONTEST (Experiment 3): a zero-sum tug-of-war layered on top of the
-  // exact same three tasks. Each side's pull = its correct answers in
-  // Task 1 + completed picture pairs in Task 2 + cleared boards in Task 3,
-  // each weighted (PULL_WEIGHT) so one unit of work in each task moves the
-  // rope a comparable amount. One rope spans all three tasks; whoever has
-  // pulled it to their side at the end of Task 3 wins the whole reward.
+  // CONTEST (Experiment 3): the exact same three tasks, played as three
+  // rounds of a zero-sum tug-of-war. Each round is its own rope: the side
+  // that solves more in that round (correct answers / completed picture
+  // pairs / matched tile pairs) wins the round.
   //
-  // The opposing side's score is generated relative to the participant's
-  // own side, following a fixed lead-change script (identical for every
-  // participant, only the final stretch differs by assigned outcome), so
-  // the lead swings back and forth and ends in a close win or close loss.
+  // Points: everyone starts with STARTING_POINTS. In Rounds 1 and 2 each
+  // member of the losing side gives ROUND_STAKE points to the winning side.
+  // Round 3 is winner-takes-all: the losing side gives ALL its points to
+  // the winning side.
+  //
+  // Outcomes are assigned in advance (randomized upstream): Rounds 1-2 are
+  // one win and one loss (order 'WL' or 'LW'), so both sides are tied at
+  // STARTING_POINTS going into Round 3, whose result is the randomized
+  // `outcome`. Within each round the opposing side's score is generated
+  // relative to the participant's side, following a fixed lead-change
+  // script identical for every participant, so the lead swings back and
+  // forth before the round goes the assigned way.
   // =======================================================================
-  const PULL_WEIGHT = { math: 1, diff: 4, link: 6 };
-  const CONTEST_SCRIPT = [
-    { until: 0.12, lead: 0.5 },   // neck and neck
-    { until: 0.32, lead: 2.0 },   // opponent pulls ahead
-    { until: 0.52, lead: -2.0 },  // participant's side takes the lead
-    { until: 0.72, lead: 2.2 },   // opponent comes back
-    { until: 0.86, lead: -0.6 },  // participant's side edges back in front
+  const STARTING_POINTS = 10;
+  const ROUND_STAKE = 5;
+  const ROUND_TASKS = ['math', 'diff', 'link'];
+  const ROUND_NAMES = { math: 'Calculation', diff: 'Spot the Difference', link: 'Match Pairs' };
+  // Per-round lead script, in "lead units" (positive = opponent ahead), as
+  // a function of the share of the round elapsed. The last 25% depends on
+  // the round's assigned outcome: in a win the opposing side stops gaining,
+  // in a loss it pulls away.
+  const ROUND_SCRIPT = [
+    { until: 0.15, lead: 0.5 },   // neck and neck
+    { until: 0.40, lead: 1.5 },   // opponent pulls ahead
+    { until: 0.62, lead: -1.5 },  // participant's side takes the lead
+    { until: 0.75, lead: 0.5 },   // opponent claws back — close again
   ];
-  const CONTEST_FINAL_LEAD = { lose: 1.6, win: -1.6 };
+  const ROUND_FINAL_LEAD = { lose: 1.5, win: -99 };
   // The five preset messages. Participants can only send these (no free
   // text); simulated teammates only ever send these. All are in-group
   // encouragement / thanks — none mentions or disparages the other team.
@@ -470,12 +489,9 @@
   ];
   const PRESET_TEXT = Object.fromEntries(PRESET_MESSAGES.map((m) => [m.id, m.text]));
   const PRESET_REPLY = { m1: 'm3', m2: 'm1', m3: 'm5', m4: 'm5', m5: 'm3' };
-  // Teammate chat at fixed points of the contest, timed to the script so
+  // Teammate chat at fixed points of each round, timed to the script so
   // "catch up" only appears while behind and "keep it up" while ahead.
-  const TEAM_CHAT_SCHEDULE = [
-    { at: 0.04, msg: 'm1' }, { at: 0.24, msg: 'm2' }, { at: 0.44, msg: 'm3' },
-    { at: 0.64, msg: 'm2' }, { at: 0.80, msg: 'm3' }, { at: 0.92, msg: 'm1' },
-  ];
+  const ROUND_CHAT_SCHEDULE = [{ at: 0.05, msg: 'm1' }, { at: 0.30, msg: 'm2' }, { at: 0.55, msg: 'm3' }];
 
   const CONTEST = CONFIG.contest ? (function () {
     const isGroup = CONFIG.contest === 'group';
@@ -484,68 +500,88 @@
     const oppMembers = S.roster.filter((p) => p.groupLabel === other);
     const oppSize = Math.max(1, oppMembers.length);
     const durations = { math: CONFIG.durationSec, diff: CONFIG.diffDurationSec, link: CONFIG.linkDurationSec };
-    const totalMs = (durations.math + durations.diff + durations.link) * 1000;
-    const before = { math: 0, diff: durations.math * 1000, link: (durations.math + durations.diff) * 1000 };
-    const unit = Math.max(2, Math.round(ownSize * 1.2)); // one "lead unit", in pull points
-    const oppBaseRate = Math.max(0.9, oppSize * 0.5);     // max opposing pull per second
+    const baseInterval = {
+      math: MATH_BASE_INTERVAL_SEC[CONFIG.difficulty],
+      diff: DIFF_BASE_INTERVAL_SEC[CONFIG.diffDifficulty],
+      link: LINK_BASE_INTERVAL_SEC[CONFIG.linkDifficulty] / linkPairsPerBoard(),
+    };
+    const order = CONFIG.contestOrder === 'LW' ? ['lose', 'win'] : ['win', 'lose'];
+    const assigned = { math: order[0], diff: order[1], link: CONFIG.contestOutcome };
+    // One lead unit ~ 8% of what one side typically scores in that round.
+    const unit = {};
+    const oppBaseRate = {}; // max opposing units / second, before pace scaling
+    ROUND_TASKS.forEach((k) => {
+      const expectedOwn = ownSize * durations[k] / baseInterval[k];
+      unit[k] = Math.max(1, Math.round(expectedOwn * 0.08));
+      oppBaseRate[k] = Math.max(1 / baseInterval[k], (oppSize / baseInterval[k]) * 1.6);
+    });
+
     const C = {
       mode: CONFIG.contest,
-      assignedOutcome: CONFIG.contestOutcome,
+      order: CONFIG.contestOrder,
+      assigned,
       ownUnits: { math: 0, diff: 0, link: 0 },
       oppUnits: { math: 0, diff: 0, link: 0 },
       credit: 0,
-      leadChanges: 0, lastLeader: null,
-      trajectory: [], lastSampleSec: -1,
+      currentRound: null,
+      leadChanges: { math: 0, diff: 0, link: 0 }, lastLeader: null,
+      points: { own: STARTING_POINTS, opp: STARTING_POINTS },
+      rounds: [],
+      trajectory: [], lastSample: null,
       chat: [], chatSentCounts: Object.fromEntries(PRESET_MESSAGES.map((m) => [m.id, 0])), chatIdx: 0,
       realizedOutcome: null,
     };
     const ownName = isGroup ? `Group ${S.group} (your team)` : 'You';
     const oppName = isGroup ? `Group ${other}` : `Participant ${oppMembers[0] ? oppMembers[0].label : '?'}`;
 
-    function pull(units) { return units.math * PULL_WEIGHT.math + units.diff * PULL_WEIGHT.diff + units.link * PULL_WEIGHT.link; }
-    function ownPull() { return pull(C.ownUnits); }
-    function oppPull() { return pull(C.oppUnits); }
-    function scriptedLead(p) {
-      for (const seg of CONTEST_SCRIPT) if (p < seg.until) return seg.lead;
-      return CONTEST_FINAL_LEAD[C.assignedOutcome];
+    function roundNumber(k) { return ROUND_TASKS.indexOf(k) + 1; }
+    function scriptedLead(k, p) {
+      for (const seg of ROUND_SCRIPT) if (p < seg.until) return seg.lead;
+      return ROUND_FINAL_LEAD[assigned[k]];
     }
 
-    // Called on every scoreboard refresh for the current task. Updates the
-    // opposing side (only when dtSec > 0, i.e. on the timed tick), then
-    // overwrites the opposing team's scoreboard entries with it.
-    function update(taskKey, t, elapsedMs, dtSec) {
-      C.ownUnits[taskKey] = t.totals[S.group] || 0;
-      const globalMs = before[taskKey] + elapsedMs;
+    // Called on every scoreboard refresh of the current round. Moves the
+    // opposing side (only on the timed tick, dtSec > 0), then overwrites the
+    // opposing team's scoreboard entries with it.
+    function beginRound(k) {
+      if (C.currentRound === k) return;
+      C.currentRound = k; C.credit = 0; C.chatIdx = 0; C.lastLeader = null;
+    }
+    function update(k, t, elapsedMs, dtSec) {
+      beginRound(k);
+      C.ownUnits[k] = t.totals[S.group] || 0;
       if (dtSec > 0) {
-        const p = Math.min(1, globalMs / totalMs);
-        const own = ownPull();
-        const target = own + scriptedLead(p) * unit;
-        const ownRate = globalMs > 5000 ? own / (globalMs / 1000) : 0;
-        const rate = Math.max(oppBaseRate, ownRate * 2);
-        const w = PULL_WEIGHT[taskKey];
-        if (target > oppPull() + w / 2) {
-          C.credit += (rate * dtSec * randFloat(0.6, 1.4)) / w;
-          while (C.credit >= 1 && oppPull() + w / 2 < target) { C.oppUnits[taskKey]++; C.credit -= 1; }
+        const p = Math.min(1, elapsedMs / (durations[k] * 1000));
+        const own = C.ownUnits[k];
+        const target = own + scriptedLead(k, p) * unit[k];
+        const ownRate = elapsedMs > 5000 ? own / (elapsedMs / 1000) : 0;
+        const rate = Math.max(oppBaseRate[k], ownRate * 2);
+        if (target > C.oppUnits[k] + 0.5) {
+          C.credit += rate * dtSec * randFloat(0.6, 1.4);
+          while (C.credit >= 1 && C.oppUnits[k] + 0.5 < target) { C.oppUnits[k]++; C.credit -= 1; }
         } else {
           C.credit = 0;
         }
-        if (isGroup && C.chatIdx < TEAM_CHAT_SCHEDULE.length && p >= TEAM_CHAT_SCHEDULE[C.chatIdx].at) {
-          botSay(null, TEAM_CHAT_SCHEDULE[C.chatIdx].msg);
+        if (isGroup && C.chatIdx < ROUND_CHAT_SCHEDULE.length && p >= ROUND_CHAT_SCHEDULE[C.chatIdx].at) {
+          botSay(null, ROUND_CHAT_SCHEDULE[C.chatIdx].msg);
           C.chatIdx++;
         }
-        const sec = Math.floor(globalMs / 1000);
-        if (sec !== C.lastSampleSec) { C.lastSampleSec = sec; C.trajectory.push({ t: sec, task: taskKey, own: ownPull(), opp: oppPull() }); }
+        const sec = Math.floor(elapsedMs / 1000);
+        if (!C.lastSample || C.lastSample.k !== k || C.lastSample.sec !== sec) {
+          C.lastSample = { k, sec };
+          C.trajectory.push({ round: roundNumber(k), t: sec, own: C.ownUnits[k], opp: C.oppUnits[k] });
+        }
       }
-      overrideOpposingScoreboard(taskKey, t);
-      const diff = ownPull() - oppPull();
+      overrideOpposingScoreboard(k, t);
+      const diff = C.ownUnits[k] - C.oppUnits[k];
       const leader = diff > 0 ? 'own' : diff < 0 ? 'opp' : null;
-      if (leader && C.lastLeader && leader !== C.lastLeader) C.leadChanges++;
+      if (leader && C.lastLeader && leader !== C.lastLeader) C.leadChanges[k]++;
       if (leader) C.lastLeader = leader;
       updateRopeDom();
     }
 
-    function overrideOpposingScoreboard(taskKey, t) {
-      const n = C.oppUnits[taskKey];
+    function overrideOpposingScoreboard(k, t) {
+      const n = C.oppUnits[k];
       t.totals[other] = n;
       const list = (t.teams[other] || []).slice().sort((a, b) => a.label - b.label);
       const base = Math.floor(n / Math.max(1, list.length));
@@ -553,21 +589,59 @@
       list.forEach((m) => { m.correctCount = base + (rem > 0 ? 1 : 0); rem--; });
     }
 
-    // At the end of Task 3: make sure the assigned outcome holds at the
-    // buzzer. A loss can always be forced; a win can't be if the opposing
-    // side already passed a participant's side that stopped playing — that
-    // rare case is flagged via outcomeManipulationOk = false.
-    function finalize() {
-      if (C.assignedOutcome === 'lose' && oppPull() <= ownPull()) {
-        while (oppPull() <= ownPull() + unit / 2) C.oppUnits.link++;
+    // At the end of each round: enforce the assigned result at the buzzer,
+    // then transfer points. A loss can always be enforced, and in the group
+    // arm so can a win (a teammate scores at the buzzer). In the individual
+    // arm a win can't be enforced if the opponent is still ahead of a
+    // participant who stopped playing — such a round is recorded as
+    // realized 'lose' (or 'tie', with no transfer) and flagged via
+    // outcomeManipulationOk.
+    function endRound(k, t) {
+      if (assigned[k] === 'lose' && C.oppUnits[k] <= C.ownUnits[k]) {
+        C.oppUnits[k] = C.ownUnits[k] + unit[k];
+        if (t) overrideOpposingScoreboard(k, t);
       }
-      const d = ownPull() - oppPull();
-      C.realizedOutcome = d > 0 ? 'win' : d < 0 ? 'lose' : 'tie';
+      // Group arm: an assigned win can always be secured too, by a simulated
+      // teammate scoring at the buzzer.
+      const mates = ingroupBots();
+      if (assigned[k] === 'win' && C.ownUnits[k] <= C.oppUnits[k] && mates.length && t && t.schedule) {
+        const need = C.oppUnits[k] - C.ownUnits[k] + 1;
+        const bot = mates[randInt(0, mates.length - 1)];
+        const atMs = durations[k] * 1000 - 1;
+        for (let i = 0; i < need; i++) (t.schedule[bot.id] = t.schedule[bot.id] || []).push(atMs);
+        C.ownUnits[k] += need;
+        t.totals[S.group] = (t.totals[S.group] || 0) + need;
+        const entry = (t.teams[S.group] || []).find((e) => e.id === bot.id);
+        if (entry) entry.correctCount += need;
+      }
+      const d = C.ownUnits[k] - C.oppUnits[k];
+      const realized = d > 0 ? 'win' : d < 0 ? 'lose' : 'tie';
+      const before = { own: C.points.own, opp: C.points.opp };
+      let transfer = 0;
+      if (realized !== 'tie') {
+        const loserKey = realized === 'win' ? 'opp' : 'own';
+        const winnerKey = realized === 'win' ? 'own' : 'opp';
+        transfer = k === 'link' ? C.points[loserKey] : Math.min(ROUND_STAKE, C.points[loserKey]);
+        C.points[loserKey] -= transfer;
+        C.points[winnerKey] += transfer;
+      }
+      C.rounds.push({
+        round: roundNumber(k), task: k,
+        assignedOutcome: assigned[k], realizedOutcome: realized,
+        ownSideScore: C.ownUnits[k], opposingSideScore: C.oppUnits[k],
+        leadChanges: C.leadChanges[k],
+        pointsTransferred: transfer,
+        pointsBefore: before, pointsAfter: { own: C.points.own, opp: C.points.opp },
+      });
+      if (k === 'link') C.realizedOutcome = realized;
+      updateRopeDom();
     }
 
-    function ropeCardHtml() {
+    function ropeCardHtml(k) {
+      const label = k ? `Round ${roundNumber(k)} of 3 · ${ROUND_NAMES[k]}${k === 'link' ? ' · Winner takes all' : ''}` : '';
       return `<div class="card contest-top">
           <div class="tug">
+            ${label ? `<div class="tug-round">${esc(label)}</div>` : ''}
             <div class="tug-labels"><span class="tug-own">${esc(ownName)}</span><span class="tug-opp">${esc(oppName)}</span></div>
             <div class="tug-track">
               <div class="tug-zone own"></div><div class="tug-zone opp"></div>
@@ -579,11 +653,18 @@
               <span class="tug-status" id="tug-status">Tied</span>
               <span class="tug-score opp" id="pull-opp">0</span>
             </div>
+            <div class="tug-points" id="tug-points"></div>
           </div>
         </div>`;
     }
+    function pointsLine() {
+      return isGroup
+        ? `Points — each member of your team: <strong>${C.points.own}</strong> · each member of Group ${esc(other)}: <strong>${C.points.opp}</strong>`
+        : `Points — you: <strong>${C.points.own}</strong> · ${esc(oppName)}: <strong>${C.points.opp}</strong>`;
+    }
     function updateRopeDom() {
-      const own = ownPull(), opp = oppPull(), diff = own - opp;
+      const k = C.currentRound;
+      const own = k ? C.ownUnits[k] : 0, opp = k ? C.oppUnits[k] : 0, diff = own - opp;
       const o = document.getElementById('pull-own'), q = document.getElementById('pull-opp');
       if (o) o.textContent = String(own);
       if (q) q.textContent = String(opp);
@@ -594,7 +675,9 @@
         st.className = 'tug-status ' + (diff > 0 ? 'ahead' : diff < 0 ? 'behind' : '');
       }
       const knot = document.getElementById('tug-knot');
-      if (knot) knot.style.left = `${50 + Math.max(-1, Math.min(1, -diff / (unit * 3))) * 42}%`;
+      if (knot) knot.style.left = `${50 + Math.max(-1, Math.min(1, -diff / ((k ? unit[k] : 1) * 3))) * 42}%`;
+      const pts = document.getElementById('tug-points');
+      if (pts) pts.innerHTML = pointsLine();
     }
 
     function chatCardHtml() {
@@ -615,7 +698,7 @@
       el.scrollTop = el.scrollHeight;
     }
     function post(sender, msgId) {
-      C.chat.push({ phase: S.phase, sender: sender.isReal ? 'self' : sender.id, senderLabel: sender.label, msgId, text: PRESET_TEXT[msgId] });
+      C.chat.push({ round: C.currentRound ? roundNumber(C.currentRound) : null, sender: sender.isReal ? 'self' : sender.id, senderLabel: sender.label, msgId, text: PRESET_TEXT[msgId] });
       renderChatFeed();
     }
     function botSay(bot, msgId) {
@@ -625,7 +708,7 @@
       post(bot || mates[randInt(0, mates.length - 1)], msgId);
     }
     function selfSend(msgId) {
-      if (!isGroup || !['math', 'diff', 'link'].includes(S.phase)) return;
+      if (!isGroup || !ROUND_TASKS.includes(S.phase)) return;
       C.chatSentCounts[msgId]++;
       post(S.roster.find((p) => p.isReal), msgId);
       const phaseAtSend = S.phase;
@@ -639,21 +722,22 @@
     function summary() {
       return {
         mode: C.mode,
-        assignedOutcome: C.assignedOutcome,
+        order: C.order,
+        assignedOutcomes: { round1: assigned.math, round2: assigned.diff, round3: assigned.link },
+        assignedOutcome: assigned.link,   // final (winner-takes-all) round
         realizedOutcome: C.realizedOutcome,
-        outcomeManipulationOk: C.realizedOutcome === C.assignedOutcome,
-        pullWeights: PULL_WEIGHT,
-        finalPullOwnSide: ownPull(),
-        finalPullOpposingSide: oppPull(),
-        ownSideUnits: C.ownUnits,
-        opposingSideUnits: C.oppUnits,
-        leadChanges: C.leadChanges,
+        outcomeManipulationOk: C.rounds.length === 3 && C.rounds.every((r) => r.realizedOutcome === r.assignedOutcome),
+        startingPoints: STARTING_POINTS,
+        roundStake: ROUND_STAKE,
+        finalPointsOwn: C.points.own,
+        finalPointsOpposing: C.points.opp,
+        rounds: C.rounds,
         trajectory: C.trajectory,
         chat: isGroup ? { log: C.chat, selfSentTotal: Object.values(C.chatSentCounts).reduce((a, b) => a + b, 0), selfSentByMessage: C.chatSentCounts } : null,
       };
     }
 
-    return { isGroup, other, ownName, oppName, state: C, update, finalize, ropeCardHtml, updateRopeDom, chatCardHtml, attachChat, botSay, summary, ownPull, oppPull };
+    return { isGroup, other, ownName, oppName, state: C, beginRound, update, endRound, ropeCardHtml, updateRopeDom, chatCardHtml, attachChat, botSay, summary, pointsLine, roundNumber };
   })() : null;
 
   if (CONFIG.debug) window.__sitDebug = { get state() { return S; }, CONFIG, giveHelp, triggerHelpReceive, contest: CONTEST };
@@ -670,18 +754,19 @@
   }
 
 
-  // Contest-mode screens: same three task screens, with the rope pinned on
-  // top (and the team chat below, group arm only); contest-specific intro,
-  // between-task and results screens.
+  // Contest-mode screens: same three task screens, with the round's rope
+  // pinned on top (and the team chat below, group arm only); contest-
+  // specific intro, between-round and results screens.
   function renderContest() {
     if (S.phase === 'intro') return renderContestIntro();
-    if (S.phase === 'math_done') return renderContestBetween(1, 'Task 2: Spot the Difference', 'find all the differences between two pictures', startDiffTask);
-    if (S.phase === 'diff_done') return renderContestBetween(2, 'Task 3: Match Pairs', 'click two matching tiles that can be connected by a path with at most two turns; clearing a whole board counts as one round', startLinkTask);
+    if (S.phase === 'math_done') return renderContestBetween('math', 'diff', startDiffTask);
+    if (S.phase === 'diff_done') return renderContestBetween('diff', 'link', startLinkTask);
     if (S.phase === 'results') return renderContestResults();
     if (S.phase === 'math') renderMathPlaying();
     else if (S.phase === 'diff') renderDiffPlaying();
     else if (S.phase === 'link') renderLinkPlaying();
-    app.insertAdjacentHTML('afterbegin', CONTEST.ropeCardHtml());
+    CONTEST.beginRound(S.phase);
+    app.insertAdjacentHTML('afterbegin', CONTEST.ropeCardHtml(S.phase));
     if (CONTEST.isGroup) {
       const scoreCard = document.getElementById('scoreboard-slot');
       (scoreCard ? scoreCard.closest('.card') : app.lastElementChild).insertAdjacentHTML('afterend', CONTEST.chatCardHtml());
@@ -690,53 +775,84 @@
     CONTEST.updateRopeDom();
   }
 
+  const ROUND_DESC = {
+    math: 'a calculation challenge — solve as many math problems as you can',
+    diff: '"Spot the Difference" — find all the differences between two pictures',
+    link: '"Match Pairs" — click two matching tiles that can be connected by a path with at most two turns; every pair you match pulls the rope',
+  };
+
   function renderContestIntro() {
     const g = CONTEST.isGroup;
     const opp = S.roster.find((p) => p.groupLabel === CONTEST.other);
+    const side = g ? 'team' : 'side';
     app.innerHTML = `
       <div class="card">
         <h1>Tug-of-War Contest</h1>
         ${g
           ? `<p>You have been assigned to <span class="badge ${S.group === 'A' ? 'a' : 'b'}">Group ${esc(S.group)}</span>. Your team will compete against Group ${esc(CONTEST.other)}.</p>`
           : `<p>You will compete one-on-one against another participant (Participant ${esc(opp ? opp.label : '?')}).</p>`}
-        <p>The contest has three rounds: a calculation challenge, then "Spot the Difference", then "Match Pairs". Every problem ${g ? 'your team solves' : 'you solve'} pulls the rope toward ${g ? 'your team' : 'you'}; every problem the other side solves pulls it the other way. You can watch the rope and both sides' scores at all times.</p>
-        <p><strong>${g ? 'The team that has pulled the rope to its side at the end of Round 3 wins. Every member of the winning team receives a bonus reward; members of the losing team receive nothing.' : 'Whoever has pulled the rope to their side at the end of Round 3 wins. The winner receives a bonus reward; the loser receives nothing.'}</strong></p>
-        ${g ? `<p><strong>Helping your team:</strong> every ${CONFIG.helpThreshold} problems you complete earn you a chance to help a teammate of your choice, and teammates can help you too. You can also send messages to your team with the message buttons.</p>` : ''}
-        <p class="muted">There is no cooperation between the two sides: any point one side gains is a point the other side has to make up.</p>
+        <p>The contest has <strong>three rounds</strong>, each its own tug-of-war: Round 1 is a calculation challenge, Round 2 is "Spot the Difference", Round 3 is "Match Pairs". Every problem ${g ? 'your team solves' : 'you solve'} pulls the rope toward ${g ? 'your team' : 'you'}; every problem the other side solves pulls it the other way. Whoever has pulled the rope to their side when the round's time runs out wins that round.</p>
+        <div class="notice mt">
+          <strong>Points.</strong> ${g ? 'Every participant' : 'You and your opponent each'} start with <strong>10 points</strong>.
+          <ul class="rules-list">
+            <li><strong>Rounds 1 and 2:</strong> ${g ? 'each member of the losing team gives 5 points to the winning team.' : 'the loser gives 5 points to the winner.'}</li>
+            <li><strong>Round 3 — winner takes all:</strong> ${g ? 'the losing team gives <em>all</em> of its points to the winning team.' : 'the loser gives <em>all</em> of their points to the winner.'}</li>
+          </ul>
+        </div>
+        ${g ? `<p class="mt"><strong>Helping your team:</strong> every ${CONFIG.helpThreshold} problems you complete earn you a chance to help a teammate of your choice, and teammates can help you too. You can also send messages to your team with the message buttons.</p>` : ''}
+        <p class="muted mt">There is no cooperation between the two ${side}s: any point one ${side} gains is a point the other ${side} loses.</p>
       </div>
       ${g ? `<div class="card"><h2>Team Roster</h2>${renderRosterColumns()}</div>` : ''}
       <div class="card"><button id="start-btn" style="width:100%;">Start Round 1: Calculation</button></div>`;
     document.getElementById('start-btn').addEventListener('click', startMathTask);
   }
 
-  function renderContestBetween(doneNum, nextName, nextDesc, startFn) {
+  function roundResultText(r) {
+    const g = CONTEST.isGroup;
+    if (r.realizedOutcome === 'tie') return 'This round was a tie — no points change hands.';
+    const won = r.realizedOutcome === 'win';
+    const final = r.task === 'link';
+    if (g) {
+      return won
+        ? (final ? `Your team won the final round and takes all of Group ${esc(CONTEST.other)}'s points.` : `Your team won Round ${r.round}! Each member of Group ${esc(CONTEST.other)} gives ${r.pointsTransferred} points to your team.`)
+        : (final ? `Your team lost the final round. Group ${esc(CONTEST.other)} takes all of your team's points.` : `Your team lost Round ${r.round}. Each member of your team gives ${r.pointsTransferred} points to Group ${esc(CONTEST.other)}.`);
+    }
+    return won
+      ? (final ? `You won the final round and take all of ${esc(CONTEST.oppName)}'s points.` : `You won Round ${r.round}! ${esc(CONTEST.oppName)} gives you ${r.pointsTransferred} points.`)
+      : (final ? `You lost the final round. ${esc(CONTEST.oppName)} takes all of your points.` : `You lost Round ${r.round}. You give ${r.pointsTransferred} points to ${esc(CONTEST.oppName)}.`);
+  }
+
+  function renderContestBetween(doneKey, nextKey, startFn) {
+    const r = CONTEST.state.rounds[CONTEST.state.rounds.length - 1];
+    const g = CONTEST.isGroup;
+    const won = r.realizedOutcome === 'win';
+    const headline = r.realizedOutcome === 'tie' ? `Round ${r.round}: Tie` : (g ? (won ? `Your team won Round ${r.round}!` : `Your team lost Round ${r.round}`) : (won ? `You won Round ${r.round}!` : `You lost Round ${r.round}`));
+    const finalNext = nextKey === 'link';
     app.innerHTML = `
       <div class="card center">
-        <h1>Round ${doneNum} Complete</h1>
-        <p class="lead">The contest continues. Next is ${esc(nextName)} — ${esc(nextDesc)}. The rope carries over from where it is now.</p>
-        <button id="next-round-btn" class="mt" style="width:100%;">Start ${esc(nextName)}</button>
+        <h1>${headline}</h1>
+        <div class="final-score"><span class="tug-own">${esc(CONTEST.ownName)}: <strong>${r.ownSideScore}</strong></span> &nbsp;vs&nbsp; <span class="tug-opp">${esc(CONTEST.oppName)}: <strong>${r.opposingSideScore}</strong></span></div>
+        <p class="lead mt">${roundResultText(r)}</p>
+        <div class="notice">${CONTEST.pointsLine()}</div>
+        <p class="mt">Next: <strong>Round ${r.round + 1}</strong> — ${ROUND_DESC[nextKey]}.${finalNext ? ' <strong>This is the final round: winner takes all.</strong> The losing side gives all of its points to the winning side.' : ''}</p>
+        <button id="next-round-btn" class="mt" style="width:100%;">Start Round ${r.round + 1}: ${esc(ROUND_NAMES[nextKey])}</button>
       </div>`;
-    app.insertAdjacentHTML('afterbegin', CONTEST.ropeCardHtml());
-    CONTEST.updateRopeDom();
     document.getElementById('next-round-btn').addEventListener('click', startFn);
   }
 
   function renderContestResults() {
     const g = CONTEST.isGroup;
+    const r = CONTEST.state.rounds[CONTEST.state.rounds.length - 1];
     const won = CONTEST.state.realizedOutcome === 'win';
-    const headline = g ? (won ? 'Your team won!' : 'Your team lost.') : (won ? 'You won!' : 'You lost.');
-    const reward = g
-      ? (won ? 'Every member of your team receives the bonus reward.' : `Group ${esc(CONTEST.other)} receives the bonus reward. Your team receives nothing.`)
-      : (won ? 'You receive the bonus reward.' : `${esc(CONTEST.oppName)} receives the bonus reward. You receive nothing.`);
+    const headline = CONTEST.state.realizedOutcome === 'tie' ? 'The final round was a tie' : (g ? (won ? 'Your team won the contest!' : 'Your team lost the contest.') : (won ? 'You won the contest!' : 'You lost the contest.'));
     app.innerHTML = `
       <div class="card center">
         <h1>${headline}</h1>
-        <div class="final-score"><span class="tug-own">${esc(CONTEST.ownName)}: <strong>${CONTEST.ownPull()}</strong></span> &nbsp;vs&nbsp; <span class="tug-opp">${esc(CONTEST.oppName)}: <strong>${CONTEST.oppPull()}</strong></span></div>
-        <p class="lead mt">${reward}</p>
+        <div class="final-score">Round 3: <span class="tug-own">${esc(CONTEST.ownName)} <strong>${r.ownSideScore}</strong></span> &nbsp;vs&nbsp; <span class="tug-opp">${esc(CONTEST.oppName)} <strong>${r.opposingSideScore}</strong></span></div>
+        <p class="lead mt">${roundResultText(r)}</p>
+        <div class="notice">Final ${CONTEST.pointsLine()}</div>
         <button id="contest-continue-btn" class="mt" style="width:100%;">Continue</button>
       </div>`;
-    app.insertAdjacentHTML('afterbegin', CONTEST.ropeCardHtml());
-    CONTEST.updateRopeDom();
     document.getElementById('contest-continue-btn').addEventListener('click', () => {
       reportCompletion();
       app.innerHTML = '<div class="card center"><p class="muted">Loading the next part…</p></div>';
@@ -800,6 +916,7 @@
       if (Date.now() >= m.endAt) {
         clearInterval(mathTickHandle);
         if (m.helpReceiveHandle) clearTimeout(m.helpReceiveHandle);
+        if (CONTEST) CONTEST.endRound('math', m);
         S.phase = 'math_done';
         render();
       }
@@ -950,6 +1067,7 @@
       if (Date.now() >= d.endAt) {
         clearInterval(diffTickHandle);
         if (d.helpReceiveHandle) clearTimeout(d.helpReceiveHandle);
+        if (CONTEST) CONTEST.endRound('diff', d);
         S.phase = 'diff_done';
         render();
       }
@@ -1076,10 +1194,13 @@
   // =======================================================================
   function startLinkTask() {
     const l = S.link;
-    l.schedule = generatePointSchedule(S.roster, S.group, CONFIG.linkDurationSec, LINK_BASE_INTERVAL_SEC[CONFIG.linkDifficulty], CONFIG.bias);
+    // Contest: bots score per matched pair (board time / pairs per board).
+    const linkInterval = CONFIG.contest ? LINK_BASE_INTERVAL_SEC[CONFIG.linkDifficulty] / linkPairsPerBoard() : LINK_BASE_INTERVAL_SEC[CONFIG.linkDifficulty];
+    l.schedule = generatePointSchedule(S.roster, S.group, CONFIG.linkDurationSec, linkInterval, CONFIG.bias);
     l.startAt = Date.now();
     l.endAt = l.startAt + CONFIG.linkDurationSec * 1000;
     l.boardsCompleted = 0;
+    l.pairsCleared = 0;
     l.completionTimestamps = [];
     l.selected = null;
     S.phase = 'link';
@@ -1095,7 +1216,7 @@
     linkTickHandle = setInterval(() => {
       const l = S.link;
       const elapsedMs = Math.max(0, Math.min(Date.now(), l.endAt) - l.startAt);
-      const { teams, totals } = computeScoreboard(S.roster, l.schedule, S.group, l.boardsCompleted, elapsedMs);
+      const { teams, totals } = computeScoreboard(S.roster, l.schedule, S.group, taskProgressCount('link'), elapsedMs);
       l.teams = teams; l.totals = totals;
       if (CONTEST) CONTEST.update('link', l, elapsedMs, 0.4);
       updateLinkScoreboardDom();
@@ -1104,7 +1225,7 @@
         clearInterval(linkTickHandle);
         if (l.helpReceiveHandle) clearTimeout(l.helpReceiveHandle);
         S.phase = 'results';
-        if (CONTEST) CONTEST.finalize();
+        if (CONTEST) CONTEST.endRound('link', l);
         render();
         if (!CONTEST) reportCompletion(); // contest: reported when the participant clicks Continue
       }
@@ -1121,6 +1242,11 @@
     renderLinkBoardDom();
     updateLinkProgressDom();
     updateLinkHintDom();
+  }
+
+  function linkPairsPerBoard() {
+    const cfg = LinkMatch.DIFFICULTY[CONFIG.linkDifficulty] || LinkMatch.DIFFICULTY.medium;
+    return (cfg.cols * cfg.rows) / 2;
   }
 
   function remainingCount(board) { return board.cells.filter((v) => v !== null).length; }
@@ -1148,6 +1274,12 @@
       l.board.cells[l.selected] = null;
       l.board.cells[idx] = null;
       l.selected = null;
+      l.pairsCleared++;
+      if (CONFIG.contest) {
+        maybeGrantHelpCharge('link');
+        refreshHelpPanel('link');
+        updateLinkScoreboardDomImmediate();
+      }
       if (l.hintPair && (l.hintPair.includes(clearedA) || l.hintPair.includes(clearedB))) {
         l.hintPair = null;
         l.activeHint = null;
@@ -1156,8 +1288,10 @@
       if (remainingCount(l.board) === 0) {
         l.boardsCompleted++;
         l.completionTimestamps.push(Date.now() - l.startAt);
-        maybeGrantHelpCharge('link');
-        refreshHelpPanel('link');
+        if (!CONFIG.contest) {
+          maybeGrantHelpCharge('link');
+          refreshHelpPanel('link');
+        }
         updateLinkScoreboardDomImmediate();
         setTimeout(nextLinkRound, 450);
         return;
@@ -1180,7 +1314,7 @@
   function updateLinkScoreboardDomImmediate() {
     const l = S.link;
     const elapsedMs = Math.max(0, Math.min(Date.now(), l.endAt) - l.startAt);
-    const { teams, totals } = computeScoreboard(S.roster, l.schedule, S.group, l.boardsCompleted, elapsedMs);
+    const { teams, totals } = computeScoreboard(S.roster, l.schedule, S.group, taskProgressCount('link'), elapsedMs);
     l.teams = teams; l.totals = totals;
     if (CONTEST) CONTEST.update('link', l, elapsedMs, 0);
     updateLinkScoreboardDom();
@@ -1198,7 +1332,7 @@
         <div class="hint-text center" id="link-hint">${l.activeHint ? esc(l.activeHint) : ''}</div>
       </div>
       <div class="card">
-        <h2>Live Scoreboard (Rounds Completed)</h2>
+        <h2>Live Scoreboard (${CONFIG.contest ? 'Pairs Matched' : 'Rounds Completed'})</h2>
         <div id="scoreboard-slot">${renderScoreboardHtml(l.teams, l.totals)}</div>
       </div>
       ${renderHelpPanelHtml('link')}`;
@@ -1308,13 +1442,8 @@
     let overallOtherTeamTotal = Math.round((mathOtherTotal + diffOtherTotal + linkOtherTotal) * 10) / 10;
     let overallOutcome = 'tie';
     if (overallOwnTeamTotal !== overallOtherTeamTotal) overallOutcome = overallOwnTeamTotal > overallOtherTeamTotal ? 'win' : 'lose';
-    // Contest: the winner is decided by the rope (weighted pull), and Task 3
-    // is scored by boards cleared (no speed bonus), consistent with the rope.
-    if (CONTEST) {
-      overallOwnTeamTotal = CONTEST.ownPull();
-      overallOtherTeamTotal = CONTEST.oppPull();
-      overallOutcome = CONTEST.state.realizedOutcome;
-    }
+    // Contest: overall result = the final (winner-takes-all) round.
+    if (CONTEST) overallOutcome = CONTEST.state.realizedOutcome;
 
     return {
       pid: CONFIG.pid,
@@ -1326,6 +1455,9 @@
       diffTeamTotal, diffOtherTeamTotal: diffOtherTotal, diffOutcome,
       diffDurationSec: CONFIG.diffDurationSec,
       linkBoardsCompleted: l.boardsCompleted,
+      linkPairsCleared: l.pairsCleared,
+      // Contest: Task 3 is scored by matched pairs (no speed bonus), which
+      // is what decided the round.
       linkTeamTotal: CONTEST ? CONTEST.state.ownUnits.link : linkTeamTotal,
       linkOtherTeamTotal: CONTEST ? CONTEST.state.oppUnits.link : linkOtherTotal,
       linkOutcome: CONTEST ? outcomeFor({ [S.group]: CONTEST.state.ownUnits.link, [CONTEST.other]: CONTEST.state.oppUnits.link }, S.group) : linkOutcome,

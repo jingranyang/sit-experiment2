@@ -25,13 +25,14 @@ Condition 1's task instructions, the Allocation Task, the Q2-Q4 scales, and the 
 
 ## Condition 3 — Intergroup Conflict Contest (Experiment 3)
 
-Condition 3 runs the **same `game.html`** as Condition 2 — identical three tasks (Calculation → Spot the Difference → Match Pairs), durations, difficulty and mutual-help rule — switched into contest mode with `contest=group|individual&outcome=win|lose`.
+Condition 3 runs the **same `game.html`** as Condition 2 — identical three tasks (Calculation → Spot the Difference → Match Pairs), durations, difficulty and mutual-help rule — switched into contest mode with `contest=group|individual&outcome=win|lose&order=WL|LW`.
 
 **What contest mode adds**
 
-- **Tug-of-war rope**, pinned at the top of every task screen. One rope spans all three tasks. Each side's pull = Task 1 correct answers × 1 + Task 2 completed picture pairs × 4 + Task 3 cleared boards × 6 (weights in `PULL_WEIGHT` in `js/game.js`, chosen so one unit of work in each task moves the rope a similar amount). Both sides' pull totals and the current lead are always visible.
-- **Zero-sum, winner-take-all framing.** Whoever has pulled the rope to their side at the end of Task 3 wins; every member of the winning side gets the bonus, the losing side gets nothing.
-- **Scripted opposing side.** The opposing side's score is generated relative to the participant's own side and follows a fixed lead-change script (`CONTEST_SCRIPT`: roughly tied → opponent ahead → participant's side ahead → opponent ahead → participant's side ahead → final stretch), identical for every participant. Only the last 14% differs: it ends in a close loss or a close win, as assigned. The participant's teammates in the group arm score at a neutral pace (`bias` is ignored).
+- **Three rounds, each its own tug-of-war.** Round 1 = Calculation, Round 2 = Spot the Difference, Round 3 = Match Pairs. The rope (pinned at the top of every task screen) is driven by that round's counts: correct answers / completed picture pairs / matched tile pairs (in the contest, Match Pairs is scored per matched pair rather than per cleared board, so the rope moves with every match). The side ahead when the round's time runs out wins the round.
+- **Points (zero-sum).** Everyone starts with **10 points**. In Rounds 1 and 2, each member of the losing side gives **5 points** to the winning side. **Round 3 is winner-takes-all**: the losing side gives all of its points to the winning side. Both sides' points are always visible under the rope, and every between-round screen shows the round result and the transfer. ("Points" rather than "coins", to keep them distinct from the gold coins in the Allocation Task.)
+- **Assigned outcomes.** Rounds 1–2 are always **one win and one loss**; the order is counterbalanced (`order=WL` win-then-lose or `order=LW` lose-then-win, randomized 50/50). So both sides are tied at 10–10 going into Round 3. The **Round 3 result is randomized** (`outcome=win|lose`, 50/50) and decides everything: final points are 20 vs 0 or 0 vs 20.
+- **Scripted opposing side, with back-and-forth.** Within each round the opposing side's score is generated relative to the participant's side and follows a fixed lead-change script (`ROUND_SCRIPT` in `js/game.js`: close → opponent ahead → participant's side ahead → close again → final stretch), identical for every participant. In the final quarter of the round the opposing side either stops gaining (assigned win) or pulls away (assigned loss). Teammates in the group arm score at a neutral pace (`bias` is ignored).
 - **Team chat (group arm only)** restricted to five preset messages — no free text, for the participant or the simulated teammates:
   1. Let's go, team! We can do this together!
   2. Don't give up — we can catch up!
@@ -39,18 +40,20 @@ Condition 3 runs the **same `game.html`** as Condition 2 — identical three tas
   4. I just helped you — keep going!
   5. Thanks for the help!
 
-  Teammates post on a fixed schedule timed to the script ("catch up" only while behind, "keep it up" only while ahead), reply to the participant's messages with a preset, say #4 when they send the participant a hint, and #5 when the participant helps them. Every message is logged.
+  Teammates post on a fixed per-round schedule timed to the script ("catch up" only while behind, "keep it up" only while ahead), reply to the participant's messages with a preset, say #4 when they send the participant a hint, and #5 when the participant helps them. Every message is logged.
 
 **The 2 × 2 within Condition 3** (both factors randomized 50/50, or forced with `contestMode=` / `outcome=`):
 
-| | Win | Lose |
+| | Final round won (20 : 0) | Final round lost (0 : 20) |
 |---|---|---|
 | **Group contest** (5-vs-5, help + preset chat) | ① | ② |
 | **Individual contest** (1-vs-1, no group, no help, no chat) | ③ | ④ |
 
-**Measures afterward.** Same Allocation Task and scales as the other conditions, with `unlimited` allocation framing by default (so the only difference from Experiment 1's no-conflict baseline is the contest; use `exp3Alloc=fixed10` for the old fixed-10-coin framing). Two contest comprehension checks are added: who receives the reward (winning side only) and whether the participant's side won or lost (scored against the actual result — a manipulation check). In the **individual arm** there is no group: the allocation table is the same 10 people without a Group column, with the contest opponent marked; the identification question is skipped (`identification: null`); `ingroupAffect` = feelings toward the other participants, `outgroupAffect` = feelings toward the contest opponent.
+Rounds 1–2 order (WL / LW) is counterbalanced within every cell and can be pooled or included as a control.
 
-**Outcome guarantee.** A loss can always be enforced at the buzzer. A win cannot be enforced if the participant stops playing while the opposing side is ahead (scores never go down); this is flagged in the payload as `contest.outcomeManipulationOk: false` and those cases should be excluded or analyzed by realized outcome.
+**Measures afterward.** Same Allocation Task and scales as the other conditions, with `unlimited` allocation framing by default (so the only difference from Experiment 1's no-conflict baseline is the contest; use `exp3Alloc=fixed10` for the old fixed-10-coin framing). Two contest comprehension checks are added: what happens to the losing side's points in the final round (the winner takes all) and whether the participant's side won or lost the final round (scored against the actual result — a manipulation check). In the **individual arm** there is no group: the allocation table is the same 10 people without a Group column, with the contest opponent marked; the identification question is skipped (`identification: null`); `ingroupAffect` = feelings toward the other participants, `outgroupAffect` = feelings toward the contest opponent.
+
+**Outcome guarantee.** An assigned loss can always be enforced at the buzzer. An assigned win cannot be if the participant stops playing while the opposing side is ahead (scores never go down); that round is then recorded with its actual result (points transfer accordingly) and flagged via `contest.outcomeManipulationOk: false`. Exclude those cases or analyze by realized outcome (`contest.rounds[i].realizedOutcome`, `contest.realizedOutcome`). In the group arm an assigned win is always secured (a simulated teammate scores at the buzzer if needed), so this can only arise in the individual arm.
 
 ## Content that is still a draft — please review before fielding
 
@@ -69,7 +72,8 @@ Condition 3 runs the **same `game.html`** as Condition 2 — identical three tas
 | `group` | Force `A` or `B` for the real participant's team | Randomized |
 | `ingroup` / `outgroup` | Simulated teammate / opponent counts (the roster size for all three conditions) | 4 / 5 (a 5-vs-5 roster of 10 total, matching the PDF's example) |
 | `contestMode` | Condition 3: force `group` or `individual` | Random (50/50) |
-| `outcome` | Condition 3: force `win` or `lose` | Random (50/50) |
+| `outcome` | Condition 3: force the final round (Round 3) result, `win` or `lose` | Random (50/50) |
+| `order` | Condition 3: force the Rounds 1–2 order, `WL` or `LW` | Random (50/50) |
 | `exp3Alloc` | Condition 3: `fixed10` to use the fixed-10-coin allocation framing after the contest | `unlimited` |
 | `duration` / `diffDuration` / `linkDuration` / `difficulty` / `diffDifficulty` / `linkDifficulty` / `bias` / `helpThreshold` | Passed straight through to the embedded game for Conditions 2 and 3 (`bias` is ignored in the contest) — see [QUALTRICS_INTEGRATION.md](./QUALTRICS_INTEGRATION.md) for what each one does | Same as `game.html`, except the three durations default a bit shorter here (120s / 90s / 90s) |
 | `help` | Set to `0` to disable the mutual-help mechanic in Condition 2 | On |
@@ -95,8 +99,8 @@ Assembled once the participant reaches the debrief screen, and (if `dataEndpoint
 |---|---|
 | `pid` | Participant ID |
 | `condition` / `conditionName` | `1`/`2`/`3` and `group_label_control` / `enhanced_belonging` / `intergroup_conflict_contest` |
-| `contestMode` / `contestOutcomeAssigned` | Condition 3 only: `group`/`individual` and `win`/`lose` (else `null`) |
-| `contest` | Condition 3 only: `{mode, assignedOutcome, realizedOutcome, outcomeManipulationOk, pullWeights, finalPullOwnSide, finalPullOpposingSide, ownSideUnits, opposingSideUnits, leadChanges, trajectory: [{t, task, own, opp}], chat: {log, selfSentTotal, selfSentByMessage} (group arm)}` |
+| `contestMode` / `contestOutcomeAssigned` / `contestOrder` | Condition 3 only: `group`/`individual`, the final-round result `win`/`lose`, and the Rounds 1–2 order `WL`/`LW` (else `null`) |
+| `contest` | Condition 3 only: `{mode, order, assignedOutcomes: {round1, round2, round3}, assignedOutcome, realizedOutcome, outcomeManipulationOk, startingPoints, roundStake, finalPointsOwn, finalPointsOpposing, rounds: [{round, task, assignedOutcome, realizedOutcome, ownSideScore, opposingSideScore, leadChanges, pointsTransferred, pointsBefore, pointsAfter}], trajectory: [{round, t, own, opp}], chat: {log, selfSentTotal, selfSentByMessage} (group arm)}` |
 | `group` / `participantLabel` | Assigned team (`A`/`B`) and the participant's own "Participant N" label |
 | `rosterSize` | `{total, inGroup, outGroup}` |
 | `consentAgreedAt` | ISO timestamp |
@@ -106,6 +110,6 @@ Assembled once the participant reaches the debrief screen, and (if `dataEndpoint
 | `allocationMode` | `unlimited` or `fixed10` |
 | `allocation` | `{entries: [{label, groupLabel, isSelf, isOpponent, allocation}], total}` (`groupLabel` is `null` in the Condition 3 individual arm) — one entry per roster member, `allocation` is `'0'`/`'1'`/`'2'`/`'cannot'` |
 | `identification` / `ingroupAffect` / `outgroupAffect` | -50 to 50 (Condition 3 individual arm: `identification` is `null`; the two affect fields are toward the other participants / the contest opponent) |
-| `comprehension` | `{q5: {prompt, answer, correct}, q6: {...}, ...}` — `q7`/`q8` only present in `fixed10` mode; `qc1` (reward rule) / `qc2` (won or lost) only in Condition 3 |
+| `comprehension` | `{q5: {prompt, answer, correct}, q6: {...}, ...}` — `q7`/`q8` only present in `fixed10` mode; `qc1` (final round is winner-takes-all) / `qc2` (won or lost the final round) only in Condition 3 |
 | `timestamps` | `{enteredAt, demographicsAt, assignedAt, taskStartAt, measuresStartAt, debriefAt}` — ISO strings |
 | `userAgent` | `navigator.userAgent`, for basic data-quality screening |

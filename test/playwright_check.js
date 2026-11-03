@@ -431,14 +431,14 @@ async function h1Now(ctx, text) {
 // game.html tasks as Condition 2, in contest mode (tug-of-war rope, scripted
 // opposing side, preset-only team chat in the group arm). Plays one arm of
 // the 2 (group/individual) x 2 (win/lose) design at a human-like pace.
-async function playContestArm(browser, mode, outcome, extraParams = '') {
-  const tag = `condition 3 [${mode}/${outcome}${extraParams ? ' ' + extraParams : ''}]`;
+async function playContestArm(browser, mode, outcome, order, extraParams = '') {
+  const tag = `condition 3 [${mode}/${order}+${outcome}${extraParams ? ' ' + extraParams : ''}]`;
   const page = await browser.newPage({ viewport: { width: 760, height: 1400 } });
   const consoleErrors = [];
   page.on('pageerror', (e) => consoleErrors.push(String(e)));
   page.on('console', (msg) => { if (msg.type() === 'error') consoleErrors.push(msg.text()); });
 
-  await page.goto(`${BASE}/?pid=FLOW_C3_${mode}_${outcome}&condition=3&contestMode=${mode}&outcome=${outcome}&group=B&ingroup=4&outgroup=5&duration=40&diffDuration=25&linkDuration=25&difficulty=easy&diffDifficulty=easy&linkDifficulty=easy&helpThreshold=3&helpReceiveInterval=6&debug=1${extraParams}`);
+  await page.goto(`${BASE}/?pid=FLOW_C3_${mode}_${outcome}&condition=3&contestMode=${mode}&outcome=${outcome}&order=${order}&group=B&ingroup=4&outgroup=5&duration=40&diffDuration=25&linkDuration=25&difficulty=easy&diffDifficulty=easy&linkDifficulty=easy&helpThreshold=3&helpReceiveInterval=6&debug=1${extraParams}`);
   await fillEntryAndContinue(page);
   await fillDemographicsAndContinue(page);
   await page.waitForSelector('#game-frame', { timeout: 5000 });
@@ -460,7 +460,7 @@ async function playContestArm(browser, mode, outcome, extraParams = '') {
     if (await helpBtn.count()) await helpBtn.click({ timeout: 800 }).catch(() => {});
   }
   // Round 1: math, ~1 correct answer per 2.5s.
-  while (!(await h1Now(f, 'Round 1 Complete'))) {
+  while ((await f.locator('#next-round-btn').count()) === 0) {
     const t = await f.locator('.problem-text').textContent({ timeout: 800 }).catch(() => null);
     const m = t && t.match(/(-?\d+)\s*([+\-*])\s*(-?\d+)\s*=/);
     if (m) {
@@ -471,9 +471,11 @@ async function playContestArm(browser, mode, outcome, extraParams = '') {
     await groupExtras();
     await sleep(2500);
   }
+  const r1 = await f.locator('h1').first().textContent();
+  assert((order === 'WL' ? /won Round 1/ : /lost Round 1/).test(r1), `${tag}: Round 1 result matches order ${order} (got "${r1}")`);
   await f.click('#next-round-btn');
   // Round 2: spot the difference, one difference clicked every ~2s.
-  while (!(await h1Now(f, 'Round 2 Complete'))) {
+  while (!(await h1Now(f, 'Round 2'))) {
     const round = await f.evaluate(() => window.__sitDebug.state.diff.round).catch(() => null);
     const box = await f.locator('#diff-canvas-a').boundingBox({ timeout: 800 }).catch(() => null);
     const next = round && round.diffs.find((d) => !d.found);
@@ -481,9 +483,14 @@ async function playContestArm(browser, mode, outcome, extraParams = '') {
     await groupExtras();
     await sleep(2000);
   }
+  const r2 = await f.locator('h1').first().textContent();
+  assert((order === 'WL' ? /lost Round 2/ : /won Round 2/).test(r2), `${tag}: Round 2 result matches order ${order} (got "${r2}")`);
+  const tiedPoints = await f.evaluate(() => window.__sitDebug.contest.state.points);
+  assert(tiedPoints.own === 10 && tiedPoints.opp === 10, `${tag}: both sides are tied at 10 points going into the final round (got ${JSON.stringify(tiedPoints)})`);
+  assert((await f.locator('text=winner takes all').count()) > 0, `${tag}: the between-round screen announces Round 3 is winner-takes-all`);
   await f.click('#next-round-btn');
   // Round 3: match pairs, one pair every ~1.5s.
-  while (!(await h1Now(f, 'won')) && !(await h1Now(f, 'lost'))) {
+  while (!(await h1Now(f, 'the contest'))) {
     const pair = await f.evaluate(() => { const b = window.__sitDebug.state.link.board; return b ? window.LinkMatch.findValidPair(b) : null; }).catch(() => null);
     if (pair) {
       await f.locator(`[data-idx="${pair[0]}"]`).click({ timeout: 800 }).catch(() => {});
@@ -497,8 +504,11 @@ async function playContestArm(browser, mode, outcome, extraParams = '') {
   assert(outcome === 'win' ? /won/.test(headline) : /lost/.test(headline), `${tag}: results screen shows the assigned outcome (got "${headline}")`);
   const st = await f.evaluate(() => window.__sitDebug.state);
   const cs = await f.evaluate(() => window.__sitDebug.contest.state);
-  assert(cs.leadChanges >= 2, `${tag}: the lead changed hands at least twice (got ${cs.leadChanges})`);
-  assert(cs.ownUnits.math > 0 && cs.ownUnits.diff > 0 && cs.ownUnits.link > 0, `${tag}: all three tasks fed the rope (own units ${JSON.stringify(cs.ownUnits)})`);
+  const totalLeadChanges = cs.leadChanges.math + cs.leadChanges.diff + cs.leadChanges.link;
+  assert(totalLeadChanges >= 3, `${tag}: the lead changed hands within the rounds (got ${JSON.stringify(cs.leadChanges)})`);
+  assert(cs.rounds.length === 3 && cs.rounds.every((r) => r.realizedOutcome === r.assignedOutcome), `${tag}: every round ended as assigned (${JSON.stringify(cs.rounds.map((r) => [r.assignedOutcome, r.realizedOutcome]))})`);
+  assert(cs.rounds[0].pointsTransferred === 5 && cs.rounds[1].pointsTransferred === 5 && cs.rounds[2].pointsTransferred === 10, `${tag}: 5 / 5 / all (10) points transferred in Rounds 1 / 2 / 3`);
+  assert(outcome === 'win' ? (cs.points.own === 20 && cs.points.opp === 0) : (cs.points.own === 0 && cs.points.opp === 20), `${tag}: final points are ${outcome === 'win' ? '20 vs 0' : '0 vs 20'} (got ${JSON.stringify(cs.points)})`);
   if (mode === 'group') {
     const given = st.math.helpsGiven + st.diff.helpsGiven + st.link.helpsGiven;
     const recv = st.math.helpsReceived + st.diff.helpsReceived + st.link.helpsReceived;
@@ -525,7 +535,7 @@ async function playContestArm(browser, mode, outcome, extraParams = '') {
     });
   }, -10);
   await selectCorrectComprehension(page, fixed10 ? 'fixed10' : 'unlimited');
-  await page.locator('input[name="comp-qc1"][value="Only the winning side"]').check();
+  await page.locator('input[name="comp-qc1"][value="The winning side took all of them"]').check();
   await page.locator(`input[name="comp-qc2"][value="${outcome === 'win' ? 'Won' : 'Lost'}"]`).check();
   await page.click('#measures-continue-btn');
 
@@ -534,7 +544,7 @@ async function playContestArm(browser, mode, outcome, extraParams = '') {
   assert(/determined in advance/.test(debriefText || ''), `${tag}: debrief discloses the predetermined outcome and simulated participants`);
   const payload = await page.evaluate(() => window.__studyDebug.state.finalPayload);
   assert(payload.condition === 3 && payload.conditionName === 'intergroup_conflict_contest', `${tag}: payload records condition 3`);
-  assert(payload.contestMode === mode && payload.contestOutcomeAssigned === outcome, `${tag}: payload records contest mode and assigned outcome`);
+  assert(payload.contestMode === mode && payload.contestOutcomeAssigned === outcome && payload.contestOrder === order, `${tag}: payload records contest mode, order and final outcome`);
   assert(payload.contest && payload.contest.outcomeManipulationOk === true, `${tag}: realized outcome matches assigned (realized=${payload.contest && payload.contest.realizedOutcome})`);
   assert(payload.game && payload.game.overallOutcome === outcome, `${tag}: game payload overallOutcome matches`);
   assert(payload.allocationMode === (fixed10 ? 'fixed10' : 'unlimited'), `${tag}: payload records the allocation mode`);
@@ -551,10 +561,10 @@ async function playContestArm(browser, mode, outcome, extraParams = '') {
 
 async function testFullFlowCondition3(browser) {
   await Promise.all([
-    playContestArm(browser, 'group', 'win'),
-    playContestArm(browser, 'group', 'lose'),
-    playContestArm(browser, 'individual', 'win'),
-    playContestArm(browser, 'individual', 'lose', '&exp3Alloc=fixed10'),
+    playContestArm(browser, 'group', 'win', 'WL'),
+    playContestArm(browser, 'group', 'lose', 'LW'),
+    playContestArm(browser, 'individual', 'win', 'LW'),
+    playContestArm(browser, 'individual', 'lose', 'WL', '&exp3Alloc=fixed10'),
   ]);
 }
 
