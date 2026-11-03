@@ -242,3 +242,67 @@ code.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; backgro
 .tug-points { text-align: center; font-size: 0.85rem; color: var(--color-muted); margin-top: 8px; }
 .tug-points strong { color: var(--color-text); }
 .rules-list { margin: 8px 0 0; padding-left: 20px; line-height: 1.55; }
+
+/* ------------------------------------------------------------------ */
+/* Experiment 3 contest: fixed, non-scrolling game screen.             */
+/* Rope on top; chat (left) | task (center) | help + scoreboard        */
+/* (right). Falls back to a stacked, scrollable layout on narrow       */
+/* screens (phones/small tablets).                                     */
+/* ------------------------------------------------------------------ */
+body.contest-playing { overflow: hidden; height: 100vh; }
+body.contest-playing #app { max-width: none; height: 100vh; min-height: 0; padding: 10px 12px; }
+.contest-layout {
+  display: grid; height: 100%; gap: 12px;
+  grid-template-columns: minmax(230px, 1fr) minmax(520px, 620px) minmax(230px, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas: "top top top" "left center right";
+}
+.contest-layout .card { margin-bottom: 0; }
+.cl-top { grid-area: top; }
+.cl-top .contest-top { position: static; max-width: 900px; margin: 0 auto; padding: 12px 18px; }
+.cl-left { grid-area: left; }
+.cl-center { grid-area: center; }
+.cl-right { grid-area: right; }
+.cl-left, .cl-right, .cl-center { min-height: 0; display: flex; flex-direction: column; gap: 12px; overflow: hidden; }
+.cl-center > .card { overflow: auto; scrollbar-width: none; }
+.cl-center > .card::-webkit-scrollbar { display: none; }
+
+.cl-left .chat-card { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.cl-left .chat-feed { flex: 1; min-height: 0; max-height: none; scrollbar-width: none; }
+.cl-left .chat-feed::-webkit-scrollbar { display: none; }
+.chat-sub { font-size: 0.78rem; margin: -6px 0 10px; }
+.cl-left .chat-presets { flex-direction: column; align-items: stretch; }
+.cl-left .chat-preset-btn { text-align: left; border-radius: 10px; }
+
+.cl-right .help-panel { flex: none; padding: 16px; }
+.cl-right .help-panel h2 { margin-bottom: 8px; }
+.cl-right .help-feed li:nth-child(n+4) { display: none; }
+.compact-scoreboard { flex: 1; min-height: 0; padding: 14px; overflow: hidden; }
+.compact-scoreboard h2 { font-size: 0.95rem; margin-bottom: 8px; }
+.compact-scoreboard .team-columns { gap: 8px; }
+.compact-scoreboard .team-col { padding: 8px; }
+.compact-scoreboard .team-col h3 { font-size: 0.78rem; }
+.compact-scoreboard .team-total { font-size: 1.3rem; margin: 2px 0 6px; }
+.compact-scoreboard .member-list { gap: 3px; }
+.compact-scoreboard .member-row { font-size: 0.74rem; padding: 3px 6px; }
+
+@media (max-width: 1000px), (max-height: 560px) {
+  body.contest-playing { overflow: auto; height: auto; }
+  body.contest-playing #app { height: auto; max-width: 640px; }
+  .contest-layout { display: flex; flex-direction: column; height: auto; }
+  .cl-top { order: 0; } .cl-center { order: 1; } .cl-left { order: 2; } .cl-right { order: 3; }
+  .cl-left, .cl-right, .cl-center { overflow: visible; }
+  .cl-left .chat-feed { max-height: 180px; }
+}
+
+/* Outer study page while the contest runs: give the game the full window. */
+body.contest-stage { overflow: hidden; }
+body.contest-stage #app { max-width: none; padding: 4px 0 0; min-height: 0; }
+body.contest-stage .stage-progress { margin-bottom: 4px; }
+@media (max-width: 1000px), (max-height: 560px) {
+  body.contest-stage { overflow: auto; }
+}
+/* Keep the Match Pairs board, its progress line and the hint line all in view on shorter screens. */
+.cl-center .link-grid { max-width: min(420px, calc(100vh - 430px)); }
+.cl-center .link-tile { font-size: clamp(0.9rem, 2.6vh, 1.4rem); }
+.contest-layout.individual .compact-scoreboard { flex: none; }

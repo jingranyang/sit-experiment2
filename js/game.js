@@ -684,6 +684,7 @@
       if (!isGroup) return '';
       return `<div class="card chat-card">
           <h2>Team Chat</h2>
+          <p class="muted chat-sub">Messages and help from your teammates appear here.</p>
           <div class="chat-feed" id="chat-feed"></div>
           <div class="chat-presets">${PRESET_MESSAGES.map((m) => `<button type="button" class="chat-preset-btn" data-msg="${m.id}">${esc(m.text)}</button>`).join('')}</div>
           <p class="muted" style="font-size:0.78rem; margin:8px 0 0;">Tap a message to send it to your team.</p>
@@ -758,6 +759,7 @@
   // pinned on top (and the team chat below, group arm only); contest-
   // specific intro, between-round and results screens.
   function renderContest() {
+    document.body.classList.toggle('contest-playing', ROUND_TASKS.includes(S.phase));
     if (S.phase === 'intro') return renderContestIntro();
     if (S.phase === 'math_done') return renderContestBetween('math', 'diff', startDiffTask);
     if (S.phase === 'diff_done') return renderContestBetween('diff', 'link', startLinkTask);
@@ -766,13 +768,40 @@
     else if (S.phase === 'diff') renderDiffPlaying();
     else if (S.phase === 'link') renderLinkPlaying();
     CONTEST.beginRound(S.phase);
-    app.insertAdjacentHTML('afterbegin', CONTEST.ropeCardHtml(S.phase));
-    if (CONTEST.isGroup) {
-      const scoreCard = document.getElementById('scoreboard-slot');
-      (scoreCard ? scoreCard.closest('.card') : app.lastElementChild).insertAdjacentHTML('afterend', CONTEST.chatCardHtml());
-      CONTEST.attachChat();
-    }
+    layoutContestScreen();
+    if (CONTEST.isGroup) CONTEST.attachChat();
     CONTEST.updateRopeDom();
+  }
+
+  // Fixed, non-scrolling game screen: rope pinned on top; the task in the
+  // center; team chat on the left and mutual help + live scoreboard on the
+  // right, so the participant sees teammates' encouragement and help out
+  // of the corner of their eye while playing. Re-uses the exact task
+  // markup rendered by the Experiment 2 task screens, just re-arranged.
+  // (Individual arm: no chat/help; the scoreboard sits on the left.)
+  function layoutContestScreen() {
+    const cards = Array.from(app.children);
+    const scoreSlot = document.getElementById('scoreboard-slot');
+    const scoreCard = scoreSlot ? scoreSlot.closest('.card') : null;
+    const helpCard = document.getElementById('help-panel-' + S.phase);
+    const gameCard = cards.find((c) => c !== scoreCard && c !== helpCard) || cards[0];
+    if (scoreCard) scoreCard.classList.add('compact-scoreboard');
+    app.innerHTML = `
+      <div class="contest-layout ${CONTEST.isGroup ? 'group' : 'individual'}">
+        <div class="cl-top">${CONTEST.ropeCardHtml(S.phase)}</div>
+        <aside class="cl-left" id="cl-left">${CONTEST.isGroup ? CONTEST.chatCardHtml() : ''}</aside>
+        <main class="cl-center" id="cl-center"></main>
+        <aside class="cl-right" id="cl-right"></aside>
+      </div>`;
+    document.getElementById('cl-center').appendChild(gameCard);
+    const left = document.getElementById('cl-left');
+    const right = document.getElementById('cl-right');
+    if (CONTEST.isGroup) {
+      if (helpCard) right.appendChild(helpCard);
+      if (scoreCard) right.appendChild(scoreCard);
+    } else if (scoreCard) {
+      left.appendChild(scoreCard);
+    }
   }
 
   const ROUND_DESC = {
@@ -1020,6 +1049,8 @@
           </ul>
         </div>`;
     };
+    // Contest: own side first in the "own" color (matches the rope).
+    if (CONTEST) return `<div class="team-columns">${col(S.group, 'a')}${col(CONTEST.other, 'b')}</div>`;
     return `<div class="team-columns">${col('A', 'a')}${col('B', 'b')}</div>`;
   }
 
@@ -1328,7 +1359,7 @@
         <div class="timer">Task 3 · Time Remaining <span id="timer-display">${formatTime(Math.ceil(msLeft / 1000))}</span></div>
         <p class="center muted" id="link-progress">Click two matching tiles to try</p>
         <div id="link-grid-slot"></div>
-        <p class="center muted mt" style="font-size:0.85rem;">Completed <span id="link-completed">${l.boardsCompleted}</span> round(s)</p>
+        <p class="center muted mt" style="font-size:0.85rem;">${CONFIG.contest ? `Matched <span id="link-completed">${l.pairsCleared}</span> pair(s)` : `Completed <span id="link-completed">${l.boardsCompleted}</span> round(s)`}</p>
         <div class="hint-text center" id="link-hint">${l.activeHint ? esc(l.activeHint) : ''}</div>
       </div>
       <div class="card">
@@ -1371,7 +1402,7 @@
     const p = document.getElementById('link-progress');
     if (p && l.board) p.textContent = `${remainingCount(l.board)} / ${l.board.cells.length} tile(s) remaining this round`;
     const c = document.getElementById('link-completed');
-    if (c) c.textContent = l.boardsCompleted;
+    if (c) c.textContent = CONFIG.contest ? l.pairsCleared : l.boardsCompleted;
   }
   function updateLinkHintDom() {
     const el = document.getElementById('link-hint');

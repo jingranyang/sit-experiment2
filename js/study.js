@@ -481,11 +481,13 @@
     if (qs.get('helpReceiveInterval')) params.set('helpReceiveInterval', qs.get('helpReceiveInterval'));
     if (CONFIG.debug) params.set('debug', '1');
 
+    // Full-window frame, so the game's fixed (non-scrolling) layout gets
+    // the whole screen on desktop; narrow screens scroll as usual.
+    document.body.classList.add('contest-stage');
+    const narrow = window.matchMedia('(max-width: 1000px), (max-height: 560px)').matches;
     app.innerHTML = `
       ${progressBarHtml()}
-      <div class="card">
-        <iframe id="game-frame" src="game.html?${params.toString()}" width="100%" height="1150" style="border:none; border-radius:10px; background:var(--color-panel-2);"></iframe>
-      </div>`;
+      <iframe id="game-frame" src="game.html?${params.toString()}" style="display:block; width:100%; height:${narrow ? '1500px' : 'calc(100vh - 32px)'}; border:none; background:transparent;"></iframe>`;
   }
 
   // One persistent listener for the whole page lifetime; only acts while
@@ -502,6 +504,7 @@
       // individual arm keeps its own 10-person ungrouped roster (built at
       // assignment) whose self/opponent labels were passed into the game.
       S.contestPayload = payload;
+      document.body.classList.remove('contest-stage');
       if (S.contestMode === 'group' && Array.isArray(payload.roster) && payload.roster.length) {
         S.roster = payload.roster;
         const self = S.roster.find((p) => p.isReal);
