@@ -200,7 +200,7 @@
   function render() {
     if (S.stage === 'entry') return renderEntry();
     if (S.stage === 'ineligible') return renderIneligible();
-    if (S.stage === 'demographics') return renderDemographics();
+    if (S.stage === 'demographics') return renderMeasures();
     if (S.stage === 'assigning') return renderAssigning();
     if (S.stage === 'task_intro') return renderTaskIntro();
     if (S.stage === 'task_game') return renderTaskGame();
@@ -308,42 +308,6 @@
     { id: 'education', prompt: 'What is the highest level of education you have completed?', options: ['Less than high school', 'High school graduate', 'Some college', 'Associate degree', "Bachelor's degree", 'Graduate degree', 'Prefer not to say'] },
     { id: 'party', prompt: 'Generally speaking, do you usually think of yourself as a:', options: ['Strong Democrat', 'Democrat', 'Independent', 'Lean Democrat', 'Lean Republican', 'Republican', 'Strong Republican', 'Other', 'Prefer not to say'] },
   ];
-
-  function renderDemographics() {
-    app.innerHTML = `
-      ${progressBarHtml()}
-      <div class="card">
-        <h1>About You</h1>
-        <p class="muted">Finally, a few background questions about yourself.</p>
-        ${DEMOGRAPHIC_QUESTIONS.map((q) => `
-          <div class="measure-block">
-            <h3>${esc(q.prompt)}</h3>
-            <div class="radio-group" data-demo-id="${q.id}">
-              ${q.options.map((o) => `<label class="radio-option"><input type="radio" name="demo-${q.id}" value="${esc(o)}" /> ${esc(o)}</label>`).join('')}
-            </div>
-          </div>`).join('')}
-        <p class="error-text hidden" id="demo-error">Please answer every question to continue.</p>
-        <button type="button" id="demo-continue-btn" class="mt" style="width:100%;">Continue</button>
-      </div>`;
-    document.querySelectorAll('.radio-group').forEach((grp) => {
-      const id = grp.dataset.demoId;
-      grp.querySelectorAll('input[type="radio"]').forEach((input) => {
-        input.addEventListener('change', () => { S.demographics[id] = input.value; });
-      });
-    });
-    document.getElementById('demo-continue-btn').addEventListener('click', () => {
-      const allAnswered = DEMOGRAPHIC_QUESTIONS.every((q) => S.demographics[q.id]);
-      if (!allAnswered) {
-        document.getElementById('demo-error').classList.remove('hidden');
-        return;
-      }
-      S.timestamps.debriefAt = nowIso();
-      S.stage = 'debrief';
-      submitResults();
-      render();
-      window.scrollTo(0, 0);
-    });
-  }
 
   // =======================================================================
   // Random assignment (equal thirds unless forced via ?condition=)
@@ -573,15 +537,87 @@
     return ctx;
   }
 
+  // Questionnaire after the task: one question per page with Previous /
+  // Next. Pages = the outcome measures (allocation, scales, comprehension
+  // checks; built by measures.js) followed by the background questions.
+  // All pages live in the DOM at once, so answers are kept when moving back
+  // and forth; Next validates only the current page.
+  function demographicPagesHtml() {
+    return DEMOGRAPHIC_QUESTIONS.map((q, i) => `
+      <section class="card q-page hidden" data-qid="demo-${q.id}" data-section="demographics">
+        <h2>About You <span class="muted q-sub">(${i + 1} of ${DEMOGRAPHIC_QUESTIONS.length})</span></h2>
+        ${i === 0 ? '<p class="muted">Finally, a few background questions about yourself.</p>' : ''}
+        <div class="measure-block">
+          <h3>${esc(q.prompt)}</h3>
+          <div class="radio-group" data-demo-id="${q.id}">
+            ${q.options.map((o) => `<label class="radio-option"><input type="radio" name="demo-${q.id}" value="${esc(o)}" /> ${esc(o)}</label>`).join('')}
+          </div>
+        </div>
+      </section>`).join('');
+  }
+
   function renderMeasures() {
-    app.innerHTML = progressBarHtml() + window.OutcomeMeasures.renderHtml(S.allocMode, measuresCtx());
-    window.OutcomeMeasures.attachListeners(S.allocMode, measuresCtx(), S.measures, () => {
-      S.timestamps.demographicsAt = nowIso();
-      S.stage = 'demographics';
+    app.innerHTML = `
+      <div class="stage-progress" id="q-stage">${STEP_LABELS.measures}</div>
+      <div id="q-pages">${window.OutcomeMeasures.renderHtml(S.allocMode, measuresCtx())}${demographicPagesHtml()}</div>
+      <div class="card pager-nav">
+        <p class="error-text hidden" id="pg-error"></p>
+        <div class="pager-row">
+          <button type="button" id="pg-prev" class="secondary">← Previous</button>
+          <span class="muted pager-count" id="pg-count"></span>
+          <button type="button" id="pg-next">Next →</button>
+        </div>
+      </div>`;
+    const validateMeasure = window.OutcomeMeasures.attachListeners(S.allocMode, measuresCtx(), S.measures);
+    document.querySelectorAll('.radio-group[data-demo-id]').forEach((grp) => {
+      const id = grp.dataset.demoId;
+      grp.querySelectorAll('input[type="radio"]').forEach((input) => {
+        input.addEventListener('change', () => { S.demographics[id] = input.value; });
+      });
+    });
+
+    const pages = Array.from(document.querySelectorAll('#q-pages .q-page'));
+    const prevBtn = document.getElementById('pg-prev');
+    const nextBtn = document.getElementById('pg-next');
+    const errEl = document.getElementById('pg-error');
+    const stageEl = document.getElementById('q-stage');
+    S.pageVisits = S.pageVisits || [];
+    let idx = 0;
+
+    function validate(pg) {
+      const qid = pg.dataset.qid;
+      if (qid.startsWith('demo-')) return S.demographics[qid.slice(5)] ? null : 'Please choose an answer.';
+      return validateMeasure(qid);
+    }
+    function show(i) {
+      idx = i;
+      pages.forEach((pg, j) => pg.classList.toggle('hidden', j !== i));
+      const pg = pages[i];
+      const isDemo = pg.dataset.section === 'demographics';
+      if (isDemo && !S.timestamps.demographicsAt) S.timestamps.demographicsAt = nowIso();
+      S.stage = isDemo ? 'demographics' : 'measures';
+      stageEl.innerHTML = STEP_LABELS[S.stage];
+      prevBtn.disabled = i === 0;
+      nextBtn.textContent = i === pages.length - 1 ? 'Submit' : 'Next →';
+      document.getElementById('pg-count').textContent = `Page ${i + 1} of ${pages.length}`;
+      errEl.classList.add('hidden');
+      S.pageVisits.push({ qid: pg.dataset.qid, at: nowIso() });
+      window.scrollTo(0, 0);
+    }
+    prevBtn.addEventListener('click', () => { if (idx > 0) show(idx - 1); });
+    nextBtn.addEventListener('click', () => {
+      const err = validate(pages[idx]);
+      if (err) { errEl.textContent = err; errEl.classList.remove('hidden'); return; }
+      if (idx < pages.length - 1) { show(idx + 1); return; }
+      S.timestamps.debriefAt = nowIso();
+      S.stage = 'debrief';
+      submitResults();
       render();
       window.scrollTo(0, 0);
     });
+    show(0);
   }
+
 
   // =======================================================================
   // Debrief — exact statement from the KU POLS proposal, section 7, plus an
@@ -672,6 +708,7 @@
       timestamps: S.timestamps,
       userAgent: navigator.userAgent,
       device: S.device,
+      pageVisits: S.pageVisits || [],
     };
   }
 

@@ -161,17 +161,22 @@ window.OutcomeMeasures = (function () {
         <div class="slider-anchors"><span>${esc(leftLabel)} (-50)</span><span>Neutral (0)</span><span>${esc(rightLabel)} (50)</span></div>
       </div>`;
 
-    const comprehensionHtml = comprehensionFor(mode, ctx).map((q) => `
-      <div class="measure-block">
-        <h3>${esc(q.prompt)}</h3>
-        <div class="radio-group" data-comp-id="${q.id}">
-          ${q.options.map((o) => `<label class="radio-option"><input type="radio" name="comp-${q.id}" value="${esc(o)}" /> ${esc(o)}</label>`).join('')}
-        </div>
-      </div>`).join('');
+    // One question per page. Each page is a <section class="q-page"> with a
+    // data-qid; the pager (study.js) shows one at a time, and validate()
+    // (returned by attachListeners) checks the current page before moving on.
+    const page = (qid, inner) => `<section class="card q-page hidden" data-qid="${qid}">${inner}</section>`;
+    const compPages = comprehensionFor(mode, ctx).map((q, i, arr) => page('comp-' + q.id, `
+        <h2>Comprehension Check <span class="muted q-sub">(${i + 1} of ${arr.length})</span></h2>
+        <p class="muted">To confirm that you understand the rules of this task, please answer the following question.</p>
+        <div class="measure-block">
+          <h3>${esc(q.prompt)}</h3>
+          <div class="radio-group" data-comp-id="${q.id}">
+            ${q.options.map((o) => `<label class="radio-option"><input type="radio" name="comp-${q.id}" value="${esc(o)}" /> ${esc(o)}</label>`).join('')}
+          </div>
+        </div>`)).join('');
 
-    return `
-      <div class="card">
-        <h2>Question 1 — Allocation Task</h2>
+    const allocPage = page('alloc', `
+        <h2>Allocation Task</h2>
         ${ctx.showScenario ? `<div class="notice scenario mt" style="margin-bottom:14px;">${esc(scenarioText(mode, individual, !!ctx.contest))}</div>` : ''}
         ${individual
           ? `<p>Your ID: Participant ${esc(self.label)}</p>
@@ -185,41 +190,19 @@ window.OutcomeMeasures = (function () {
           <tbody>${rowsHtml}</tbody>
         </table>
         </div>
-        ${mode === 'fixed10' ? `<p class="mt" id="alloc-total-line">Total allocated so far: <strong id="alloc-total">0</strong> / 10</p>` : ''}
-        <p class="error-text hidden" id="alloc-error">Please answer for every participant${mode === 'fixed10' ? ', and keep the total at 10 or below' : ''}.</p>
-      </div>
-      ${individual ? `
-      <div class="card">
-        <h2>Question 2 — Feelings Toward Other Participants</h2>
-        ${sliderBlock('ingroupAffect', 'How do you feel toward the other participants in this study (other than your contest opponent)?', 'Please rate based on your true feelings.', 'Very unfavorable', 'Very favorable')}
-      </div>
-      <div class="card">
-        <h2>Question 3 — Feelings Toward Your Opponent</h2>
-        ${sliderBlock('outgroupAffect', `How do you feel toward your opponent in the contest (Participant ${ctx.individual.opponentLabel})?`, 'Please rate based on your true feelings.', 'Very unfavorable', 'Very favorable')}
-      </div>` : `
-      <div class="card">
-        <h2>Question 2 — Group Identification</h2>
-        ${sliderBlock('identification', `To what extent do you identify with your group (Group ${group})?`, '"Identify" means that you feel you belong to this group and associate yourself with it to some extent. Please rate based on your true feelings.', 'Do not identify at all', 'Very strong identification')}
-      </div>
-      <div class="card">
-        <h2>Question 3 — In-Group Affect</h2>
-        ${sliderBlock('ingroupAffect', `How do you feel toward members of your own group (Group ${group})?`, 'Please rate based on your true feelings.', 'Very unfavorable', 'Very favorable')}
-      </div>
-      <div class="card">
-        <h2>Question 4 — Out-Group Affect</h2>
-        ${sliderBlock('outgroupAffect', `How do you feel toward members of the other group (Group ${otherGroup})?`, 'Please rate based on your true feelings.', 'Very unfavorable', 'Very favorable')}
-      </div>`}
-      <div class="card">
-        <h2>Comprehension Check</h2>
-        <p class="muted">To confirm that you understand the rules of this task, please answer the following questions.</p>
-        ${comprehensionHtml}
-      </div>
-      <div class="card center">
-        <button type="button" id="measures-continue-btn" style="width:100%;">Continue</button>
-      </div>`;
+        ${mode === 'fixed10' ? `<p class="mt" id="alloc-total-line">Total allocated so far: <strong id="alloc-total">0</strong> / 10</p>` : ''}`);
+
+    const sliderPages = individual
+      ? page('ingroupAffect', `<h2>Feelings Toward Other Participants</h2>${sliderBlock('ingroupAffect', 'How do you feel toward the other participants in this study (other than your contest opponent)?', 'Please rate based on your true feelings.', 'Very unfavorable', 'Very favorable')}`)
+        + page('outgroupAffect', `<h2>Feelings Toward Your Opponent</h2>${sliderBlock('outgroupAffect', `How do you feel toward your opponent in the contest (Participant ${ctx.individual.opponentLabel})?`, 'Please rate based on your true feelings.', 'Very unfavorable', 'Very favorable')}`)
+      : page('identification', `<h2>Group Identification</h2>${sliderBlock('identification', `To what extent do you identify with your group (Group ${group})?`, '"Identify" means that you feel you belong to this group and associate yourself with it to some extent. Please rate based on your true feelings.', 'Do not identify at all', 'Very strong identification')}`)
+        + page('ingroupAffect', `<h2>In-Group Affect</h2>${sliderBlock('ingroupAffect', `How do you feel toward members of your own group (Group ${group})?`, 'Please rate based on your true feelings.', 'Very unfavorable', 'Very favorable')}`)
+        + page('outgroupAffect', `<h2>Out-Group Affect</h2>${sliderBlock('outgroupAffect', `How do you feel toward members of the other group (Group ${otherGroup})?`, 'Please rate based on your true feelings.', 'Very unfavorable', 'Very favorable')}`);
+
+    return allocPage + sliderPages + compPages;
   }
 
-  function attachListeners(mode, ctx, state, onContinue) {
+  function attachListeners(mode, ctx, state) {
     const { roster } = ctx;
     const totalEl = document.getElementById('alloc-total');
 
@@ -262,29 +245,23 @@ window.OutcomeMeasures = (function () {
       });
     });
 
-    const btn = document.getElementById('measures-continue-btn');
-    const err = document.getElementById('alloc-error');
-    btn.addEventListener('click', () => {
-      const allAllocated = roster.every((p) => state.allocations[p.label] !== undefined);
-      const total = recomputeTotal();
-      const totalOk = mode !== 'fixed10' || total <= 10;
-      if (!allAllocated || !totalOk) {
-        if (err) err.classList.remove('hidden');
-        return;
+    // Per-page validation for the pager: returns an error message, or null
+    // if the page is complete.
+    return function validate(qid) {
+      if (qid === 'alloc') {
+        const allAllocated = roster.every((p) => state.allocations[p.label] !== undefined);
+        if (!allAllocated) return 'Please choose an allocation for every participant.';
+        if (mode === 'fixed10' && recomputeTotal() > 10) return 'The total number of gold coins allocated cannot exceed 10.';
+        return null;
       }
-      if (err) err.classList.add('hidden');
-      const allSlidersTouched = (ctx.individual || state.identificationTouched) && state.ingroupAffectTouched && state.outgroupAffectTouched;
-      if (!allSlidersTouched) {
-        alert('Please move each slider to record your answer before continuing.');
-        return;
+      if (qid === 'identification' || qid === 'ingroupAffect' || qid === 'outgroupAffect') {
+        return state[qid + 'Touched'] ? null : 'Please move the slider to record your answer. (If your answer is neutral, move it and set it back to 0.)';
       }
-      const allComprehension = comprehensionFor(mode, ctx).every((q) => state.comprehension[q.id] !== undefined);
-      if (!allComprehension) {
-        alert('Please answer the comprehension-check questions before continuing.');
-        return;
+      if (qid.startsWith('comp-')) {
+        return state.comprehension[qid.slice(5)] !== undefined ? null : 'Please choose an answer.';
       }
-      onContinue();
-    });
+      return null;
+    };
   }
 
   function correctness(mode, comprehension, ctx) {

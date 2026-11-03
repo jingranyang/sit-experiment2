@@ -342,13 +342,15 @@ async function fillEntryAndContinue(page) {
   await page.click('#entry-continue-btn');
 }
 
-async function fillDemographicsAndContinue(page) {
-  await page.waitForSelector('#demo-continue-btn', { timeout: 5000 });
-  const groups = await page.locator('.radio-group[data-demo-id]').all();
-  for (const g of groups) {
-    await g.locator('input[type="radio"]').first().check();
-  }
-  await page.click('#demo-continue-btn');
+// The questionnaire shows one question per page (Previous / Next). These
+// helpers answer whatever page is visible and click Next until the debrief.
+const CORRECT_COMP = {
+  unlimited: { q5: 'Unlimited', q6: 'The gold coins other participants receive will not be affected' },
+  fixed10: { q5: 'Fixed at 10 coins', q6: 'Cannot exceed 10 coins', q7: 'May require reducing gold coins allocated to others', q8: 'Since the total is limited, trade-offs between participants may be needed' },
+};
+
+async function currentQid(page) {
+  return page.evaluate(() => { const p = document.querySelector('#q-pages .q-page:not(.hidden)'); return p ? p.dataset.qid : null; });
 }
 
 async function fillAllocations(page, perPersonValue) {
@@ -358,23 +360,33 @@ async function fillAllocations(page, perPersonValue) {
   }
 }
 
-async function selectCorrectComprehension(page, mode) {
-  const comp = mode === 'fixed10'
-    ? [['q5', 'Fixed at 10 coins'], ['q6', 'Cannot exceed 10 coins'], ['q7', 'May require reducing gold coins allocated to others'], ['q8', 'Since the total is limited, trade-offs between participants may be needed']]
-    : [['q5', 'Unlimited'], ['q6', 'The gold coins other participants receive will not be affected']];
-  for (const [id, val] of comp) {
-    await page.locator(`input[name="comp-${id}"][value="${val}"]`).check();
-  }
+async function setSlider(page, id, value) {
+  await page.evaluate(([i, v]) => {
+    const el = document.getElementById(i);
+    el.value = String(v);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  }, [id, value]);
 }
 
-async function setAffectSliders(page, value) {
-  await page.evaluate((v) => {
-    ['identification', 'ingroupAffect', 'outgroupAffect'].forEach((id) => {
-      const el = document.getElementById(id);
-      el.value = String(v);
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-  }, value);
+// opts: { alloc: '0'|'1'|'2', slider: number, comp: {qid: answer} }
+// Returns the list of page ids visited, in order.
+async function completeQuestionnaire(page, opts) {
+  const visited = [];
+  for (let i = 0; i < 40; i++) {
+    if (await h1Now(page, 'Debriefing Statement')) break;
+    const qid = await currentQid(page);
+    if (!qid) { await sleep(100); continue; }
+    visited.push(qid);
+    const visibleCount = await page.locator('#q-pages .q-page:not(.hidden)').count();
+    assert(visibleCount === 1, `questionnaire: exactly one question page visible at a time (page ${qid})`);
+    if (qid === 'alloc') await fillAllocations(page, opts.alloc);
+    else if (['identification', 'ingroupAffect', 'outgroupAffect'].includes(qid)) await setSlider(page, qid, opts.slider);
+    else if (qid.startsWith('comp-')) await page.locator(`input[name="${qid}"][value="${opts.comp[qid.slice(5)]}"]`).check();
+    else if (qid.startsWith('demo-')) await page.locator(`#q-pages .q-page[data-qid="${qid}"] input[type="radio"]`).first().check();
+    await page.click('#pg-next');
+    await sleep(60);
+  }
+  return visited;
 }
 
 async function testFullFlowCondition1(browser) {
@@ -392,22 +404,30 @@ async function testFullFlowCondition1(browser) {
   assert(/Group A/.test(badgeText || ''), `condition 1: shown group assignment matches the forced group A (got "${badgeText}")`);
   await page.click('#task-intro-continue-btn');
 
-  const reachedMeasures = await waitUntil(() => page.locator('#measures-continue-btn').count().then((c) => c > 0), 5000);
+  const reachedMeasures = await waitUntil(async () => (await currentQid(page)) === 'alloc', 5000);
   assert(reachedMeasures, 'condition 1: reaches the outcome-measures (allocation task) screen');
   const rowCount = await page.locator('.alloc-table tbody tr').count();
   assert(rowCount === 10, `condition 1: allocation table lists all 10 participants (got ${rowCount})`);
   const noCapShown = (await page.locator('#alloc-total-line').count()) === 0;
   assert(noCapShown, 'condition 1 (unlimited mode): no running-total cap is shown');
 
+  // Pager behaviour: Next is blocked until the page is answered; Previous
+  // goes back with answers kept.
+  assert(await page.locator('#pg-prev').isDisabled(), 'pager: Previous is disabled on the first page');
+  await page.click('#pg-next');
+  assert((await page.locator('#pg-error:not(.hidden)').count()) === 1 && (await currentQid(page)) === 'alloc', 'pager: Next is blocked until the allocation page is complete');
   await fillAllocations(page, '1');
-  await setAffectSliders(page, 15);
-  await selectCorrectComprehension(page, 'unlimited');
-  await page.click('#measures-continue-btn');
-  const demoAfterMeasures = await waitUntil(() => h1Includes(page, 'About You'), 5000);
-  assert(demoAfterMeasures, 'flow order: background questions come after the outcome measures');
-  await page.click('#demo-continue-btn');
-  assert((await page.locator('#demo-error:not(.hidden)').count()) === 1, 'background questions: cannot continue without answering');
-  await fillDemographicsAndContinue(page);
+  await page.click('#pg-next');
+  assert((await currentQid(page)) === 'identification', 'pager: Next moves to the identification page');
+  await page.click('#pg-prev');
+  assert((await currentQid(page)) === 'alloc', 'pager: Previous goes back to the allocation page');
+  const kept = await page.locator('input[name^="alloc-"]:checked').count();
+  assert(kept === 10, `pager: allocation answers are kept after going back (got ${kept} checked)`);
+  const visited = await completeQuestionnaire(page, { alloc: '1', slider: 15, comp: CORRECT_COMP.unlimited });
+  const firstDemo = visited.findIndex((q) => q.startsWith('demo-'));
+  const lastComp = visited.map((q) => q.startsWith('comp-')).lastIndexOf(true);
+  assert(firstDemo > lastComp && lastComp > 0, `flow order: background questions come after the comprehension checks (pages: ${visited.join(', ')})`);
+  assert(visited.filter((q) => q.startsWith('demo-')).length === 4, 'background questions: one page per question (4 pages)');
 
   const reachedDebrief = await waitUntil(() => h1Includes(page, 'Debriefing Statement'), 5000);
   assert(reachedDebrief, 'condition 1: reaches the debrief screen after completing measures');
@@ -548,27 +568,20 @@ async function playContestArm(browser, mode, outcome, order, extraParams = '') {
   }
   await f.click('#contest-continue-btn');
 
-  await waitUntil(() => page.locator('#measures-continue-btn').count().then((c) => c > 0), 5000);
+  await waitUntil(async () => (await currentQid(page)) === 'alloc', 5000);
   assert((await page.locator('.alloc-table tbody tr').count()) === 10, `${tag}: allocation table lists all 10 participants`);
   assert((await page.locator('.alloc-table thead th').count()) === (mode === 'group' ? 3 : 2), `${tag}: Group column ${mode === 'group' ? 'shown' : 'hidden'}`);
   assert((await page.locator('#identification').count()) === (mode === 'group' ? 1 : 0), `${tag}: group-identification question ${mode === 'group' ? 'shown' : 'omitted'}`);
 
   const fixed10 = extraParams.includes('exp3Alloc=fixed10');
-  await fillAllocations(page, fixed10 ? '0' : '1');
-  await page.evaluate((v) => {
-    ['identification', 'ingroupAffect', 'outgroupAffect'].forEach((id) => {
-      const el = document.getElementById(id);
-      if (!el) return;
-      el.value = String(v);
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-  }, -10);
-  await selectCorrectComprehension(page, fixed10 ? 'fixed10' : 'unlimited');
-  await page.locator('input[name="comp-qc1"][value="The winning side took all of them"]').check();
-  await page.locator(`input[name="comp-qc2"][value="${outcome === 'win' ? 'Won' : 'Lost'}"]`).check();
-  await page.click('#measures-continue-btn');
-  await fillDemographicsAndContinue(page);
-
+  if (fixed10) {
+    // Over the 10-coin cap is blocked on the allocation page.
+    await fillAllocations(page, '2');
+    await page.click('#pg-next');
+    assert((await currentQid(page)) === 'alloc' && (await page.locator('#pg-error:not(.hidden)').count()) === 1, `${tag}: allocating more than 10 gold coins is blocked`);
+  }
+  const comp = Object.assign({}, CORRECT_COMP[fixed10 ? 'fixed10' : 'unlimited'], { qc1: 'The winning side took all of them', qc2: outcome === 'win' ? 'Won' : 'Lost' });
+  await completeQuestionnaire(page, { alloc: fixed10 ? '0' : '1', slider: -10, comp });
   assert(await waitUntil(() => h1Includes(page, 'Debriefing Statement'), 5000), `${tag}: reaches debrief`);
   const debriefText = await page.locator('.card').first().textContent();
   assert(/determined in advance/.test(debriefText || ''), `${tag}: debrief discloses the predetermined outcome and simulated participants`);
@@ -625,17 +638,13 @@ async function testFullFlowCondition2(browser) {
   // We never click any link tiles ourselves; the link task runs out its
   // duration on its own (bot-driven) and should then hand control back to
   // the outer flow via postMessage, landing on the shared measures screen.
-  const reachedMeasures = await waitUntil(() => page.locator('#measures-continue-btn').count().then((c) => c > 0), 15000);
+  const reachedMeasures = await waitUntil(async () => (await currentQid(page)) === 'alloc', 15000);
   assert(reachedMeasures, 'condition 2: outer flow advances to outcome-measures after the embedded game finishes');
 
   const rowCount = await page.locator('.alloc-table tbody tr').count();
   assert(rowCount === 3, `condition 2: allocation table reuses the embedded game's own roster size (got ${rowCount} rows for ingroup=1/outgroup=1 => 3 total)`);
 
-  await fillAllocations(page, '0');
-  await setAffectSliders(page, 5);
-  await selectCorrectComprehension(page, 'unlimited');
-  await page.click('#measures-continue-btn');
-  await fillDemographicsAndContinue(page);
+  await completeQuestionnaire(page, { alloc: '0', slider: 5, comp: CORRECT_COMP.unlimited });
 
   const reachedDebrief = await waitUntil(() => h1Includes(page, 'Debriefing Statement'), 5000);
   assert(reachedDebrief, 'condition 2: reaches debrief after measures');

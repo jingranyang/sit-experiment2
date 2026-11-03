@@ -21,6 +21,8 @@ Debriefing Statement
 Data submission (POSTed to a Google Sheet, if configured — see GOOGLE_SHEETS_SETUP.md)
 ```
 
+**One question per page.** After the task, the questionnaire shows one question per page with **Previous / Next** buttons and a "Page N of M" counter: the Allocation Task, then each scale (identification, in-group affect, out-group affect — or the two individual-arm affect questions), then each comprehension-check question, then each background question. Next only advances once the current page is answered (all allocations made and within the cap; slider moved; an option chosen); Previous goes back with answers kept. The last page's button reads "Submit". The payload's `pageVisits` logs every page view in order with a timestamp.
+
 Participants go from consent straight into their assigned task; the background questions are asked at the end, after the comprehension check. (Note: because they now come after the treatment, party ID could in principle be affected by it — treat demographics as covariates measured post-treatment.)
 
 Condition 1's task instructions, the Allocation Task, the Q2-Q4 scales, and the comprehension-check questions all use the **exact wording from the KU POLS Annual Survey Proposal** (`jingran_kupolssurvey2026.pdf` in this repo), sections 5.1/5.2. Condition 2 is the three cooperative mini-games already documented in [QUALTRICS_INTEGRATION.md](./QUALTRICS_INTEGRATION.md) (`game.html`), embedded here via iframe + postMessage.
@@ -126,3 +128,4 @@ Assembled once the participant reaches the debrief screen, and (if `dataEndpoint
 | `timestamps` | `{enteredAt, demographicsAt, assignedAt, taskStartAt, measuresStartAt, debriefAt}` — ISO strings |
 | `userAgent` | `navigator.userAgent`, for basic data-quality screening |
 | `device` | `{mobileDetected, viewport: {w, h}, screen: {w, h}}` |
+| `pageVisits` | `[{qid, at}]` — every questionnaire page view, in order (e.g. `alloc`, `identification`, `comp-q5`, `demo-party`), including going back |
