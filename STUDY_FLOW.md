@@ -5,8 +5,6 @@ This is the self-contained, no-backend-required version of the whole study: depl
 ```
 Entry (Consent + Eligibility)
         ↓
-Pre-treatment Demographics (gender / age / education / party ID)
-        ↓
 Random Assignment  ──┬── 1/3 ──→ Condition 1: Group Label (control)
                       ├── 1/3 ──→ Condition 2: Enhanced Belonging (the 3 games)
                       └── 1/3 ──→ Condition 3: Intergroup Conflict Contest
@@ -16,10 +14,14 @@ Common Outcome Measurements
   Q1 Allocation Task · Q2 Identification · Q3 In-Group Affect · Q4 Out-Group Affect
   + a comprehension check (wording depends on the condition)
         ↓
+Background questions (gender / age / education / party ID)
+        ↓
 Debriefing Statement
         ↓
 Data submission (POSTed to a Google Sheet, if configured — see GOOGLE_SHEETS_SETUP.md)
 ```
+
+Participants go from consent straight into their assigned task; the background questions are asked at the end, after the comprehension check. (Note: because they now come after the treatment, party ID could in principle be affected by it — treat demographics as covariates measured post-treatment.)
 
 Condition 1's task instructions, the Allocation Task, the Q2-Q4 scales, and the comprehension-check questions all use the **exact wording from the KU POLS Annual Survey Proposal** (`jingran_kupolssurvey2026.pdf` in this repo), sections 5.1/5.2. Condition 2 is the three cooperative mini-games already documented in [QUALTRICS_INTEGRATION.md](./QUALTRICS_INTEGRATION.md) (`game.html`), embedded here via iframe + postMessage.
 
@@ -36,6 +38,7 @@ Condition 3 runs the **same `game.html`** as Condition 2 — identical three tas
 - **Three rounds, each its own tug-of-war.** Round 1 = Calculation, Round 2 = Spot the Difference, Round 3 = Match Pairs. The rope (pinned at the top of every task screen) is driven by that round's counts: correct answers / completed picture pairs / matched tile pairs (in the contest, Match Pairs is scored per matched pair rather than per cleared board, so the rope moves with every match). The side ahead when the round's time runs out wins the round.
 - **Points (zero-sum).** Everyone starts with **10 points**. In Rounds 1 and 2, each member of the losing side gives **5 points** to the winning side. **Round 3 is winner-takes-all**: the losing side gives all of its points to the winning side. Both sides' points are always visible under the rope, and every between-round screen shows the round result and the transfer. ("Points" rather than "coins", to keep them distinct from the gold coins in the Allocation Task.)
 - **Assigned outcomes.** Rounds 1–2 are always **one win and one loss**; the order is counterbalanced (`order=WL` win-then-lose or `order=LW` lose-then-win, randomized 50/50). So both sides are tied at 10–10 going into Round 3. The **Round 3 result is randomized** (`outcome=win|lose`, 50/50) and decides everything: final points are 20 vs 0 or 0 vs 20.
+- **Opposing team members score individually.** Each simulated opponent has their own fixed pace, and every point the opposing side scores goes to one member drawn at random in proportion to that pace, so the per-member counts on the scoreboard rise irregularly, like the participant's own teammates (stored per round in `contest.rounds` totals and `oppMember` in debug state).
 - **Scripted opposing side, with back-and-forth.** Within each round the opposing side's score is generated relative to the participant's side and follows a fixed lead-change script (`ROUND_SCRIPT` in `js/game.js`: close → opponent ahead → participant's side ahead → close again → final stretch), identical for every participant. In the final quarter of the round the opposing side either stops gaining (assigned win) or pulls away (assigned loss). Teammates in the group arm score at a neutral pace (`bias` is ignored).
 - **End-of-round screen.** After each round (including the final one), the same fixed layout shows the round result in the center with an **animation of the points moving** from the losing side to the winning side, one at a time: the loser's counter ticks down, the winner's ticks up, and the change is shown as −5 / +5 (−10 / +10 in the winner-takes-all final). The button to continue unlocks when the animation ends. The round's final scoreboard is on the right (left in the individual arm).
 - **Reaction chat on the end-of-round screen (group arm only).** The team chat stays on the left with five reaction presets that depend on the result — e.g. after a loss "Oh no, we lost this one. 😞", "Ugh, that was so close!", "That hurts…", "Don't worry, team — we'll do better next round!", "Let's stick together."; after a win "We did it! 🎉", "Great teamwork, everyone!", etc.; slightly different wording after the final round (`REACTION_PRESETS` in `js/game.js`). Teammates post three reactions on a fixed schedule (`REACTION_SCHEDULE`) and reply to the participant's; none mentions the other team. Each chat log entry records the `phase` it was sent in (`math`/`diff`/`link` = during play, `math_done`/`diff_done`/`results` = end-of-round screens).

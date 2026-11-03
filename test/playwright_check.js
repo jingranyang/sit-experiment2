@@ -385,7 +385,6 @@ async function testFullFlowCondition1(browser) {
 
   await page.goto(`${BASE}/?pid=FLOW_C1&condition=1&group=A&ingroup=4&outgroup=5&debug=1`);
   await fillEntryAndContinue(page);
-  await fillDemographicsAndContinue(page);
 
   const reachedIntro = await waitUntil(() => h1Includes(page, 'Task Instructions'), 5000);
   assert(reachedIntro, 'condition 1: reaches the Group Label task-instructions screen');
@@ -404,12 +403,18 @@ async function testFullFlowCondition1(browser) {
   await setAffectSliders(page, 15);
   await selectCorrectComprehension(page, 'unlimited');
   await page.click('#measures-continue-btn');
+  const demoAfterMeasures = await waitUntil(() => h1Includes(page, 'About You'), 5000);
+  assert(demoAfterMeasures, 'flow order: background questions come after the outcome measures');
+  await page.click('#demo-continue-btn');
+  assert((await page.locator('#demo-error:not(.hidden)').count()) === 1, 'background questions: cannot continue without answering');
+  await fillDemographicsAndContinue(page);
 
   const reachedDebrief = await waitUntil(() => h1Includes(page, 'Debriefing Statement'), 5000);
   assert(reachedDebrief, 'condition 1: reaches the debrief screen after completing measures');
 
   const payload = await page.evaluate(() => window.__studyDebug.state.finalPayload);
   assert(!!payload, 'condition 1: a final payload was assembled on reaching debrief');
+  assert(payload.demographics && payload.demographics.gender && payload.demographics.party, `condition 1: payload includes the background answers given at the end (got ${JSON.stringify(payload.demographics)})`);
   assert(payload.condition === 1 && payload.conditionName === 'group_label_control', `condition 1: payload records the correct condition (got ${JSON.stringify({ c: payload.condition, n: payload.conditionName })})`);
   assert(payload.allocationMode === 'unlimited', 'condition 1: payload records unlimited allocation mode');
   assert(payload.allocation.entries.length === 10, 'condition 1: payload carries all 10 allocation entries');
@@ -440,7 +445,7 @@ async function playContestArm(browser, mode, outcome, order, extraParams = '') {
 
   await page.goto(`${BASE}/?pid=FLOW_C3_${mode}_${outcome}&condition=3&contestMode=${mode}&outcome=${outcome}&order=${order}&group=B&ingroup=4&outgroup=5&duration=40&diffDuration=25&linkDuration=25&difficulty=easy&diffDifficulty=easy&linkDifficulty=easy&helpThreshold=3&helpReceiveInterval=6&debug=1${extraParams}`);
   await fillEntryAndContinue(page);
-  await fillDemographicsAndContinue(page);
+  assert((await page.locator('#demo-continue-btn').count()) === 0, `${tag}: no background questions before the game`);
   await page.waitForSelector('#game-frame', { timeout: 5000 });
   let f = null;
   await waitUntil(async () => { f = page.frames().find((x) => x.url().includes('game.html')); return !!f; }, 5000);
@@ -517,6 +522,13 @@ async function playContestArm(browser, mode, outcome, order, extraParams = '') {
   assert(outcome === 'win' ? /won/.test(headline) : /lost/.test(headline), `${tag}: results screen shows the assigned outcome (got "${headline}")`);
   const st = await f.evaluate(() => window.__sitDebug.state);
   const cs = await f.evaluate(() => window.__sitDebug.contest.state);
+  if (mode === 'group') {
+    // Opposing team members' counts should vary, not move in lockstep.
+    const perMember = Object.values(cs.oppMember.math);
+    const spread = perMember.length ? Math.max(...perMember) - Math.min(...perMember) : 0;
+    assert(perMember.length === 5 && spread >= 2, `${tag}: opposing team members' Round 1 scores differ from one another (got ${JSON.stringify(perMember)})`);
+    assert(perMember.reduce((a, b) => a + b, 0) === cs.oppUnits.math, `${tag}: opposing members' scores add up to the team total`);
+  }
   const totalLeadChanges = cs.leadChanges.math + cs.leadChanges.diff + cs.leadChanges.link;
   assert(totalLeadChanges >= 3, `${tag}: the lead changed hands within the rounds (got ${JSON.stringify(cs.leadChanges)})`);
   assert(cs.rounds.length === 3 && cs.rounds.every((r) => r.realizedOutcome === r.assignedOutcome), `${tag}: every round ended as assigned (${JSON.stringify(cs.rounds.map((r) => [r.assignedOutcome, r.realizedOutcome]))})`);
@@ -555,6 +567,7 @@ async function playContestArm(browser, mode, outcome, order, extraParams = '') {
   await page.locator('input[name="comp-qc1"][value="The winning side took all of them"]').check();
   await page.locator(`input[name="comp-qc2"][value="${outcome === 'win' ? 'Won' : 'Lost'}"]`).check();
   await page.click('#measures-continue-btn');
+  await fillDemographicsAndContinue(page);
 
   assert(await waitUntil(() => h1Includes(page, 'Debriefing Statement'), 5000), `${tag}: reaches debrief`);
   const debriefText = await page.locator('.card').first().textContent();
@@ -593,7 +606,6 @@ async function testFullFlowCondition2(browser) {
 
   await page.goto(`${BASE}/?pid=FLOW_C2&condition=2&group=A&ingroup=1&outgroup=1&duration=3&diffDuration=3&linkDuration=6&difficulty=easy&diffDifficulty=easy&linkDifficulty=easy&debug=1`);
   await fillEntryAndContinue(page);
-  await fillDemographicsAndContinue(page);
 
   await page.waitForSelector('#game-frame', { timeout: 5000 });
   let gameFrame = null;
@@ -623,6 +635,7 @@ async function testFullFlowCondition2(browser) {
   await setAffectSliders(page, 5);
   await selectCorrectComprehension(page, 'unlimited');
   await page.click('#measures-continue-btn');
+  await fillDemographicsAndContinue(page);
 
   const reachedDebrief = await waitUntil(() => h1Includes(page, 'Debriefing Statement'), 5000);
   assert(reachedDebrief, 'condition 2: reaches debrief after measures');
@@ -642,7 +655,6 @@ async function testRandomConditionAssignment(browser) {
   const page = await browser.newPage();
   await page.goto(`${BASE}/?pid=FLOW_RAND&ingroup=1&outgroup=1&debug=1`);
   await fillEntryAndContinue(page);
-  await fillDemographicsAndContinue(page);
   const assigned = await waitUntil(async () => {
     const c = await page.evaluate(() => window.__studyDebug.state.condition);
     return c !== null;

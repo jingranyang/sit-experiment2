@@ -568,7 +568,25 @@
       chat: [], chatSentCounts: Object.fromEntries(ALL_PRESETS.map((m) => [m.id, 0])), chatIdx: 0,
       reactionSet: null,
       realizedOutcome: null,
+      // Opposing side's score per member, per round. Each opponent has a
+      // fixed personal pace (like the participant's own teammates), and
+      // every point the opposing side scores goes to one member drawn at
+      // random in proportion to that pace — so individual counts rise
+      // irregularly rather than in turn.
+      oppMember: { math: {}, diff: {}, link: {} },
     };
+    const oppSkill = {};
+    oppMembers.forEach((o) => { oppSkill[o.id] = randFloat(0.6, 1.5); });
+    function addOpp(k, n) {
+      for (let i = 0; i < n; i++) {
+        C.oppUnits[k]++;
+        if (!oppMembers.length) continue;
+        const total = oppMembers.reduce((a, o) => a + oppSkill[o.id], 0);
+        let x = randFloat(0, total), pick = oppMembers[oppMembers.length - 1];
+        for (const o of oppMembers) { x -= oppSkill[o.id]; if (x <= 0) { pick = o; break; } }
+        C.oppMember[k][pick.id] = (C.oppMember[k][pick.id] || 0) + 1;
+      }
+    }
     const ownName = isGroup ? `Group ${S.group} (your team)` : 'You';
     const oppName = isGroup ? `Group ${other}` : `Participant ${oppMembers[0] ? oppMembers[0].label : '?'}`;
 
@@ -596,7 +614,7 @@
         const rate = Math.max(oppBaseRate[k], ownRate * 2);
         if (target > C.oppUnits[k] + 0.5) {
           C.credit += rate * dtSec * randFloat(0.6, 1.4);
-          while (C.credit >= 1 && C.oppUnits[k] + 0.5 < target) { C.oppUnits[k]++; C.credit -= 1; }
+          while (C.credit >= 1 && C.oppUnits[k] + 0.5 < target) { addOpp(k, 1); C.credit -= 1; }
         } else {
           C.credit = 0;
         }
@@ -621,10 +639,7 @@
     function overrideOpposingScoreboard(k, t) {
       const n = C.oppUnits[k];
       t.totals[other] = n;
-      const list = (t.teams[other] || []).slice().sort((a, b) => a.label - b.label);
-      const base = Math.floor(n / Math.max(1, list.length));
-      let rem = n - base * list.length;
-      list.forEach((m) => { m.correctCount = base + (rem > 0 ? 1 : 0); rem--; });
+      (t.teams[other] || []).forEach((m) => { m.correctCount = C.oppMember[k][m.id] || 0; });
     }
 
     // At the end of each round: enforce the assigned result at the buzzer,
@@ -636,7 +651,7 @@
     // outcomeManipulationOk.
     function endRound(k, t) {
       if (assigned[k] === 'lose' && C.oppUnits[k] <= C.ownUnits[k]) {
-        C.oppUnits[k] = C.ownUnits[k] + unit[k];
+        addOpp(k, C.ownUnits[k] + unit[k] - C.oppUnits[k]);
         if (t) overrideOpposingScoreboard(k, t);
       }
       // Group arm: an assigned win can always be secured too, by a simulated

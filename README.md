@@ -6,7 +6,7 @@ Reexamining Social Identity Theory's causal foundations: does group identity alo
 
 A **fully static, no-server-required** site, deployable directly on GitHub Pages, that runs the entire participant journey end to end — no Qualtrics required:
 
-**Participant Entry** (consent + eligibility) → **Pre-treatment demographics** → **Random assignment** to one of three conditions → **Common Outcome Measurements** (Allocation Task + group identification + in-group/out-group affect + a comprehension check) → **Debrief**.
+**Participant Entry** (consent + eligibility) → **Random assignment** to one of three conditions → **Common Outcome Measurements** (Allocation Task + group identification + in-group/out-group affect + a comprehension check) → **Background questions** (demographics) → **Debrief**.
 
 The three experimental conditions:
 

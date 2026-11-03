@@ -4,11 +4,11 @@
   // =========================================================================
   // Full-flow study controller. This drives the whole participant journey on
   // ONE site (no Qualtrics hand-off required): Entry (consent + eligibility)
-  // -> Pre-treatment demographics -> Random assignment to one of three
-  // experimental conditions -> the condition's task -> the shared "Common
-  // Outcome Measurements" (Allocation Task / Identification / In-group
-  // Affect / Out-group Affect + comprehension check) -> Debrief -> data
-  // submission.
+  // -> Random assignment to one of three experimental conditions -> the
+  // condition's task -> the shared "Common Outcome Measurements"
+  // (Allocation Task / Identification / In-group Affect / Out-group Affect
+  // + comprehension check) -> Background questions (demographics) ->
+  // Debrief -> data submission.
   //
   // Condition 1 "Group Label" reuses the exact wording from the KU POLS
   // Annual Survey Proposal (Jingran Yang, July 2026) — its "Control"
@@ -144,12 +144,12 @@
 
   const STEP_LABELS = {
     entry: 'Step 1 of 6 · Consent &amp; Eligibility',
-    demographics: 'Step 2 of 6 · About You',
-    assigning: 'Step 3 of 6 · Group Assignment',
-    task_intro: 'Step 4 of 6 · Task',
-    task_game: 'Step 4 of 6 · Task',
-    task_contest: 'Step 4 of 6 · Task',
-    measures: 'Step 5 of 6 · Questions',
+    assigning: 'Step 2 of 6 · Group Assignment',
+    task_intro: 'Step 3 of 6 · Task',
+    task_game: 'Step 3 of 6 · Task',
+    task_contest: 'Step 3 of 6 · Task',
+    measures: 'Step 4 of 6 · Questions',
+    demographics: 'Step 5 of 6 · About You',
     debrief: 'Step 6 of 6 · Debrief',
   };
   function progressBarHtml() {
@@ -277,9 +277,10 @@
       }
       S.consent.agreed = true;
       S.consent.agreedAt = nowIso();
-      S.timestamps.demographicsAt = nowIso();
-      S.stage = 'demographics';
+      S.timestamps.assignedAt = nowIso();
+      S.stage = 'assigning';
       render();
+      setTimeout(assignConditionAndRoute, 650);
     });
   }
 
@@ -296,9 +297,10 @@
   }
 
   // =======================================================================
-  // Pre-treatment demographics (exact wording/options from the KU POLS
-  // proposal, section 5.3 — asked once, before random assignment, so
-  // condition balance on these characteristics can be checked later).
+  // Background questions (exact wording/options from the KU POLS proposal,
+  // section 5.3). Asked at the END — after the outcome measures and
+  // comprehension checks, right before the debrief — so participants go
+  // from consent straight into their assigned task.
   // =======================================================================
   const DEMOGRAPHIC_QUESTIONS = [
     { id: 'gender', prompt: 'What is your gender?', options: ['Male', 'Female', 'Non-binary / Other', 'Prefer not to say'] },
@@ -312,7 +314,7 @@
       ${progressBarHtml()}
       <div class="card">
         <h1>About You</h1>
-        <p class="muted">A few background questions before we begin.</p>
+        <p class="muted">Finally, a few background questions about yourself.</p>
         ${DEMOGRAPHIC_QUESTIONS.map((q) => `
           <div class="measure-block">
             <h3>${esc(q.prompt)}</h3>
@@ -335,10 +337,11 @@
         document.getElementById('demo-error').classList.remove('hidden');
         return;
       }
-      S.timestamps.assignedAt = nowIso();
-      S.stage = 'assigning';
+      S.timestamps.debriefAt = nowIso();
+      S.stage = 'debrief';
+      submitResults();
       render();
-      setTimeout(assignConditionAndRoute, 650);
+      window.scrollTo(0, 0);
     });
   }
 
@@ -573,10 +576,10 @@
   function renderMeasures() {
     app.innerHTML = progressBarHtml() + window.OutcomeMeasures.renderHtml(S.allocMode, measuresCtx());
     window.OutcomeMeasures.attachListeners(S.allocMode, measuresCtx(), S.measures, () => {
-      S.timestamps.debriefAt = nowIso();
-      S.stage = 'debrief';
-      submitResults();
+      S.timestamps.demographicsAt = nowIso();
+      S.stage = 'demographics';
       render();
+      window.scrollTo(0, 0);
     });
   }
 
