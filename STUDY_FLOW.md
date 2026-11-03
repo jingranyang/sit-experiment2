@@ -23,6 +23,10 @@ Data submission (POSTed to a Google Sheet, if configured — see GOOGLE_SHEETS_S
 
 Condition 1's task instructions, the Allocation Task, the Q2-Q4 scales, and the comprehension-check questions all use the **exact wording from the KU POLS Annual Survey Proposal** (`jingran_kupolssurvey2026.pdf` in this repo), sections 5.1/5.2. Condition 2 is the three cooperative mini-games already documented in [QUALTRICS_INTEGRATION.md](./QUALTRICS_INTEGRATION.md) (`game.html`), embedded here via iframe + postMessage.
 
+**Random assignment happens once.** Condition, group (A/B), participant labels, and — in Condition 3 — contest arm, Rounds 1–2 order and final-round result are all assigned at the "Random Assignment" step and carried unchanged through the task, the Allocation Task and the questions. Conditions 2 and 3 allocate over the exact roster the participant just played with (the individual arm uses its own ungrouped 10-person roster, with the same self and opponent labels shown in the contest). Nothing is re-randomized at the measures stage.
+
+**Allocation scenario.** Condition 1 reads the scenario (community decision-making, gold coins) on its task-instructions screen. Conditions 2 and 3 read the same scenario at the top of the Allocation Task, after the games, worded "you and the other participants" in the individual arm and noting that the gold coins are separate from the contest points.
+
 ## Condition 3 — Intergroup Conflict Contest (Experiment 3)
 
 Condition 3 runs the **same `game.html`** as Condition 2 — identical three tasks (Calculation → Spot the Difference → Match Pairs), durations, difficulty and mutual-help rule — switched into contest mode with `contest=group|individual&outcome=win|lose&order=WL|LW`.

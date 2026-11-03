@@ -559,7 +559,10 @@
   // Shared Outcome Measures stage (all three conditions converge here)
   // =======================================================================
   function measuresCtx() {
-    const ctx = { roster: S.roster, group: S.group };
+    // Same roster/group as assigned at the start and used in the games.
+    // Conditions 2-3 get the allocation scenario here (Condition 1 already
+    // saw it on its task-instructions screen).
+    const ctx = { roster: S.roster, group: S.group, showScenario: S.condition !== 1 };
     if (S.condition === 3) {
       ctx.contest = { mode: S.contestMode, outcome: S.contestPayload && S.contestPayload.contest ? S.contestPayload.contest.realizedOutcome : S.contestOutcome };
       if (S.contestMode === 'individual') ctx.individual = { opponentLabel: S.opponentLabel };

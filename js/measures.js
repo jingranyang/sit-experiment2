@@ -113,6 +113,19 @@ window.OutcomeMeasures = (function () {
     return mine.concat(others);
   }
 
+  // The allocation scenario. Experiment 1 shows it on its task-instructions
+  // screen (same wording, KU POLS proposal 5.1/5.2); Experiments 2 and 3
+  // show it here, right before the allocation, once the games are over.
+  // The group assignment is the one made at the start of the study and used
+  // throughout the games — nothing is re-randomized here.
+  function scenarioText(mode, individual, afterContest) {
+    const who = individual ? 'you and the other participants in this study are' : 'you and members of your group are';
+    const sep = afterContest ? ' These gold coins are separate from the points in the contest you just played.' : '';
+    return mode === 'fixed10'
+      ? `During this task, ${who} participating in a community decision-making process. You have discovered 10 gold coins that can be used to support individuals and improve people’s well-being. Because the total number of gold coins is fixed, allocating more gold coins to one participant reduces the number of gold coins available to other participants. Please pay attention, other participants are not informed about the total number of gold coins available.${sep}`
+      : `During this task, ${who} participating in a community decision-making process. You have discovered an unlimited supply of gold coins that can be used to support individuals and improve people’s well-being. Please pay attention, other participants are not informed about the total number of gold coins available. Since the number of gold coins is unlimited, how many gold coins you allocate to one participant does not affect how many gold coins other participants receive.${sep}`;
+  }
+
   function renderHtml(mode, ctx) {
     const { roster, group } = ctx;
     const individual = !!ctx.individual;
@@ -159,6 +172,7 @@ window.OutcomeMeasures = (function () {
     return `
       <div class="card">
         <h2>Question 1 — Allocation Task</h2>
+        ${ctx.showScenario ? `<div class="notice scenario mt" style="margin-bottom:14px;">${esc(scenarioText(mode, individual, !!ctx.contest))}</div>` : ''}
         ${individual
           ? `<p>Your ID: Participant ${esc(self.label)}</p>
         <p class="muted">There are ${roster.length} participants in this task (including yourself). Participant ${esc(ctx.individual.opponentLabel)} was your opponent in the contest.</p>`
