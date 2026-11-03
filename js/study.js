@@ -90,9 +90,9 @@
     outGroupCount: clampInt(qs.get('outgroup'), 5, 0, 50),
     durationSec: clampInt(qs.get('duration'), 120, 10, 1800),
     difficulty: ['easy', 'medium', 'hard'].includes(qs.get('difficulty')) ? qs.get('difficulty') : 'medium',
-    diffDurationSec: clampInt(qs.get('diffDuration'), 90, 10, 1800),
+    diffDurationSec: clampInt(qs.get('diffDuration'), 150, 10, 1800),
     diffDifficulty: ['easy', 'medium', 'hard'].includes(qs.get('diffDifficulty')) ? qs.get('diffDifficulty') : 'medium',
-    linkDurationSec: clampInt(qs.get('linkDuration'), 90, 10, 1800),
+    linkDurationSec: clampInt(qs.get('linkDuration'), 180, 10, 1800),
     linkDifficulty: ['easy', 'medium', 'hard'].includes(qs.get('linkDifficulty')) ? qs.get('linkDifficulty') : 'medium',
     bias: ['win', 'lose', 'tie', 'random'].includes(qs.get('bias')) ? qs.get('bias') : 'random',
     helpEnabled: qs.get('help') !== '0',
@@ -220,7 +220,7 @@
         </div>
         <div class="consent-text mt">
           <p>You are invited to participate in a research study about how people make decisions involving members of different social and political groups. Participation is completely voluntary — you may stop at any time without penalty.</p>
-          <p>The study takes about 2-10 minutes, depending on the task you are assigned to. There are no anticipated risks beyond those of everyday life. Your responses will be kept confidential and reported only in aggregate.</p>
+          <p>The study takes about 5-15 minutes, depending on the task you are assigned to. There are no anticipated risks beyond those of everyday life. Your responses will be kept confidential and reported only in aggregate.</p>
           <p><strong>Please note:</strong> this study involves incomplete disclosure. We will not inform you in advance of the specific research question being tested, because doing so could influence your responses and affect the validity of the study. All information provided to you about the task itself, your group assignment, and the allocation rules will be accurate — there is no deception about the tasks themselves. You will receive a full explanation at the end of the study.</p>
           <p class="muted">Questions about this research may be directed to [researcher contact — add before fielding]. Questions about your rights as a research participant may be directed to [IRB contact — add before fielding].</p>
         </div>
