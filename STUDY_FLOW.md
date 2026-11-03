@@ -62,6 +62,7 @@ Rounds 1–2 order (WL / LW) is counterbalanced within every cell and can be poo
 - **Condition 3 bonus payment.** The debrief now discloses that the contest outcome was predetermined and the other participants simulated, and contains a placeholder for how the bonus is actually paid (e.g. to everyone regardless of the result). Fill that in to match your IRB protocol (`renderDebrief()` in `js/study.js`).
 - **Debrief contact info.** The debrief statement text is verbatim from the proposal, but the "[researcher contact — add before fielding]" placeholders need your actual contact info (`renderDebrief()` in `js/study.js`).
 - **Condition 2's Allocation Task mode.** Condition 2 (Enhanced Belonging) currently uses the same *unlimited*-resources framing as Condition 1, since it isn't testing resource scarcity. If your design actually wants Condition 2 to use the fixed-10-coin framing instead, change the `EXP2_ALLOCATION_MODE` constant near the top of `js/study.js` from `'unlimited'` to `'fixed10'`.
+- **Computer-only check.** Phones and tablets (touch-only input or a mobile user agent) are stopped on the first screen with a "Please use a computer" message, because Experiment 3's side panels need a desktop/laptop screen. The payload's `device` field records what was detected. Mention the computer requirement in your recruitment text too.
 - **Eligibility criteria.** Currently just "18 or older" and "US resident," gating into an in-page "not eligible" message (or a redirect to `disqualifyUrl` if you set one). Add more screening questions in `renderEntry()` if your design needs them.
 
 ## URL parameters
@@ -81,6 +82,7 @@ Rounds 1–2 order (WL / LW) is counterbalanced within every cell and can be poo
 | `dataEndpoint` | A Google Apps Script Web App URL that the final payload is POSTed to — see [GOOGLE_SHEETS_SETUP.md](./GOOGLE_SHEETS_SETUP.md) | None (results stay in-page only) |
 | `returnUrl` | If set, a "Continue" button appears on the debrief screen that navigates here (e.g. back to a panel vendor's completion URL), carrying `sit_pid` and `sit_condition` | None (a generic "thank you" notice is shown instead) |
 | `disqualifyUrl` | If set, participants who fail the eligibility screen are redirected here instead of seeing an in-page message (useful for panel vendors like the one mentioned in the proposal, which expect a specific "terminate" redirect) | None |
+| `allowMobile` | `1` skips the computer-only check (for previewing on a phone). Without it, phones and tablets see a "Please use a computer" screen and cannot start | Off |
 | `debug` | `1` exposes `window.__studyDebug` with internal state (`.state`, `.CONFIG`) — used by the automated test suite, and handy for manually inspecting `window.__studyDebug.state.finalPayload` after reaching debrief | Off |
 
 ## Testing it yourself
@@ -114,3 +116,4 @@ Assembled once the participant reaches the debrief screen, and (if `dataEndpoint
 | `comprehension` | `{q5: {prompt, answer, correct}, q6: {...}, ...}` — `q7`/`q8` only present in `fixed10` mode; `qc1` (final round is winner-takes-all) / `qc2` (won or lost the final round) only in Condition 3 |
 | `timestamps` | `{enteredAt, demographicsAt, assignedAt, taskStartAt, measuresStartAt, debriefAt}` — ISO strings |
 | `userAgent` | `navigator.userAgent`, for basic data-quality screening |
+| `device` | `{mobileDetected, viewport: {w, h}, screen: {w, h}}` |

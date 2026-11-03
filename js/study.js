@@ -106,6 +106,8 @@
     contestOrder: ['WL', 'LW'].includes((qs.get('order') || '').toUpperCase()) ? qs.get('order').toUpperCase() : null,
     exp3AllocMode: qs.get('exp3Alloc') === 'fixed10' ? 'fixed10' : 'unlimited',
     debug: qs.get('debug') === '1',
+    // ?allowMobile=1 skips the computer-only check (for previewing on a phone).
+    allowMobile: qs.get('allowMobile') === '1',
   };
 
   const app = document.getElementById('app');
@@ -210,7 +212,33 @@
   // =======================================================================
   // Entry: consent + eligibility
   // =======================================================================
+  // Computer-only check. Experiment 3's game screen relies on seeing the
+  // team chat and help panels beside the task at the same time, which only
+  // works on a desktop/laptop screen. Phones and tablets are detected by
+  // touch-only input or a mobile user agent.
+  function isMobileDevice() {
+    const ua = navigator.userAgent || '';
+    const mobileUa = /Android|iPhone|iPad|iPod|Mobile|Silk|Kindle|BlackBerry|Opera Mini|IEMobile/i.test(ua);
+    const iPadOS = /Macintosh/.test(ua) && navigator.maxTouchPoints > 1;
+    const touchOnly = window.matchMedia && window.matchMedia('(pointer: coarse)').matches && !window.matchMedia('(pointer: fine)').matches;
+    return mobileUa || iPadOS || touchOnly;
+  }
+  S.device = { mobileDetected: isMobileDevice(), viewport: { w: window.innerWidth, h: window.innerHeight }, screen: { w: screen.width, h: screen.height } };
+
+  function renderDeviceBlock() {
+    app.innerHTML = `
+      <div class="card center">
+        <h1>Please use a computer</h1>
+        <p class="lead">This study needs to be completed on a desktop or laptop computer. It does not work on phones or tablets.</p>
+        <p>Please open this same link on a computer to take part. Thank you!</p>
+      </div>`;
+  }
+
   function renderEntry() {
+    if (S.device.mobileDetected && !CONFIG.allowMobile) {
+      S.stage = 'device_blocked';
+      return renderDeviceBlock();
+    }
     app.innerHTML = `
       ${progressBarHtml()}
       <div class="card">
@@ -637,6 +665,7 @@
       comprehension,
       timestamps: S.timestamps,
       userAgent: navigator.userAgent,
+      device: S.device,
     };
   }
 
