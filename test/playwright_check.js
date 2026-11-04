@@ -670,8 +670,53 @@ async function playContestArm(browser, mode, outcome, order, extraParams = '') {
   await page.close();
 }
 
+// Realistic timing (default settings, no test shortcuts): simulated players
+// take time to read the rules before getting ready, one is still reading
+// after the participant, and a hint the participant sends a teammate only
+// counts a few seconds later.
+async function testContestRealism(browser) {
+  const page = await browser.newPage({ viewport: { width: 1366, height: 900 } });
+  await page.goto(`${BASE}/game.html?contest=group&outcome=win&order=WL&group=A&ingroup=4&outgroup=5&duration=40&difficulty=easy&helpThreshold=1&debug=1`);
+  await page.click('#overview-continue-btn');
+  await page.click('#assign-continue-btn');
+  await page.waitForSelector('#ready-btn');
+  await sleep(5000);
+  const earlyReady = await page.locator('.ready-chip.on').count();
+  assert(earlyReady === 0, `realism: nobody is ready within 5s of the rules appearing (got ${earlyReady})`);
+  await sleep(17000);
+  const midReady = await page.locator('.ready-chip.on').count();
+  assert(midReady >= 2, `realism: players become ready gradually while reading (ready after 22s: ${midReady})`);
+  await sleep(10000); // ~32s: every simulated reader done except the held straggler
+  await page.click('#ready-btn');
+  const justAfter = await page.locator('.ready-chip:not(.on)').count();
+  assert(justAfter >= 1, `realism: at least one other player is still not ready right after the participant (got ${justAfter})`);
+  await page.waitForSelector('#tug-knot', { timeout: 20000 });
+
+  // Earn a help charge and give it to a teammate.
+  const t = await page.locator('.problem-text').textContent();
+  const m = t.match(/(-?\d+)\s*([+\-*])\s*(-?\d+)/);
+  const ans = m[2] === '+' ? +m[1] + +m[3] : m[2] === '-' ? m[1] - m[3] : m[1] * m[3];
+  await page.locator('#answer-input').fill(String(ans));
+  await page.locator('#answer-input').press('Enter');
+  await page.waitForSelector('.help-target-btn', { timeout: 3000 });
+  const botId = await page.locator('.help-target-btn').first().getAttribute('data-help-target');
+  const snap = () => page.evaluate((id) => { const st = window.__sitDebug.state.math; return { list: (st.schedule[id] || []).slice(), el: Date.now() - st.startAt }; }, botId);
+  const before = await snap();
+  await page.locator('.help-target-btn').first().click();
+  const after = await snap();
+  const added = after.list.slice();
+  before.list.forEach((x) => { const i = added.indexOf(x); if (i >= 0) added.splice(i, 1); });
+  assert(added.length === 1, `realism: a hint adds exactly one point for that teammate (added ${added.length})`);
+  const lag = (added[0] - before.el) / 1000;
+  assert(lag >= 2.8 && lag <= 6.5, `realism: the teammate's hinted answer counts 3–6s after the hint, not instantly (lag ${lag.toFixed(1)}s)`);
+  const scoredYet = after.list.filter((x) => x <= after.el).length - before.list.filter((x) => x <= before.el).length;
+  assert(scoredYet === 0 || after.list.filter((x) => x <= after.el).every((x) => x !== added[0]), 'realism: the hinted point has not been counted yet right after clicking');
+  await page.close();
+}
+
 async function testFullFlowCondition3(browser) {
   await Promise.all([
+    testContestRealism(browser),
     playContestArm(browser, 'group', 'win', 'WL'),
     playContestArm(browser, 'group', 'lose', 'LW'),
     playContestArm(browser, 'individual', 'win', 'LW'),

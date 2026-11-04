@@ -127,9 +127,10 @@
     contestOutcome: qs.get('outcome') === 'win' ? 'win' : 'lose', // final (Round 3) result
     contestOrder: qs.get('order') === 'LW' ? 'LW' : 'WL',          // Rounds 1-2: win-then-lose or lose-then-win
     selfLabel: clampInt(qs.get('selfLabel'), 0, 0, 999),
-    // Ready lobby before each contest round: simulated players click
-    // "ready" at random times within this many seconds (default 9).
-    lobbyMaxSec: clampInt(qs.get('lobbyMax'), 9, 1, 60),
+    // Ready lobby: optional override of the slowest simulated reading time
+    // in seconds (default: per-round reading times, see LOBBY_READ_SEC).
+    // Mainly for shortening the wait in automated tests.
+    lobbyMaxSec: qs.get('lobbyMax') ? clampInt(qs.get('lobbyMax'), 30, 1, 120) : 0,
     lobbyCountdownSec: clampInt(qs.get('lobbyCountdown'), 3, 0, 10),
     oppLabel: clampInt(qs.get('oppLabel'), 0, 0, 999),
   };
@@ -252,6 +253,12 @@
   // helpReceiveInterval URL param, mainly for automated testing.
   const HELP_RECEIVE_INTERVAL_SEC = { math: 22, diff: 28, link: 32 };
 
+  // Seconds a simulated teammate takes to use a hint the participant sent
+  // them before it counts: math = read the answer and type it; diff = find
+  // the highlighted spot and finish the picture pair; link = locate and
+  // click the highlighted tiles.
+  const HELP_USE_DELAY_SEC = { math: [3, 6], diff: [5, 10], link: [3.5, 7] };
+
   function freshHelpState() {
     return { helpCharges: 0, helpChargesEarnedTotal: 0, helpsGiven: 0, helpsReceived: 0, helpFeed: [], activeHint: null, helpReceiveHandle: null };
   }
@@ -328,14 +335,21 @@
     if (!CONFIG.helpEnabled || S.phase !== taskKey || t.helpCharges <= 0) return;
     const bot = S.roster.find((p) => p.id === targetBotId && !p.isReal && p.groupLabel === S.group);
     if (!bot || !t.schedule) return;
-    const elapsedMs = Math.max(0, Math.min(Date.now(), t.endAt) - t.startAt);
-    (t.schedule[bot.id] = t.schedule[bot.id] || []).push(elapsedMs);
+    // The teammate needs time to read the hint and act on it (type the
+    // answer / click the spot / clear the pair), so the point lands a few
+    // seconds later — not instantly. Never past the end of the round.
+    const nowMs = Math.max(0, Math.min(Date.now(), t.endAt) - t.startAt);
+    const [lo, hi] = HELP_USE_DELAY_SEC[taskKey];
+    const delayMs = Math.round(randFloat(lo, hi) * 1000);
+    const landsAtMs = Math.min(nowMs + delayMs, t.endAt - t.startAt - 300);
+    (t.schedule[bot.id] = t.schedule[bot.id] || []).push(landsAtMs);
     t.schedule[bot.id].sort((a, b) => a - b);
     t.helpCharges--;
     t.helpsGiven++;
     pushHelpFeed(taskKey, `You gave Participant ${bot.label} a hint.`);
-    showHelpToast(`You helped Participant ${bot.label}!`);
-    if (CONTEST) setTimeout(() => { if (S.phase === taskKey) CONTEST.botSay(bot, 'm5'); }, randInt(1200, 2400));
+    showHelpToast(`You sent Participant ${bot.label} a hint!`);
+    // They say thanks a moment after using the hint.
+    if (CONTEST) setTimeout(() => { if (S.phase === taskKey) CONTEST.botSay(bot, 'm5'); }, Math.max(0, landsAtMs - nowMs) + randInt(1200, 3000));
     refreshTaskScoreboardImmediate(taskKey);
     refreshHelpPanel(taskKey);
   }
@@ -989,6 +1003,16 @@
   // ready. Simulated players get ready at random times; once the
   // participant and everyone else are ready, a short countdown starts the
   // round automatically.
+  // Reading time (seconds) for the fastest and slowest simulated players on
+  // each round's ready screen — longer for rounds with more rules to read.
+  const LOBBY_READ_SEC = { math: [9, 26], diff: [12, 32], link: [16, 42] };
+  // Persistent per-player reading speed in [0, 1] (0 = fastest reader).
+  const READER_SPEED = {};
+  function readerSpeed(id) {
+    if (READER_SPEED[id] === undefined) READER_SPEED[id] = Math.pow(randFloat(0, 1), 0.8);
+    return READER_SPEED[id];
+  }
+
   function renderContestLobby(k) {
     const g = CONTEST.isGroup;
     const n = ROUND_TASKS.indexOf(k) + 1;
@@ -1058,15 +1082,30 @@
       };
       tick();
     }
-    // Simulated players get ready at random times, spread over the window.
-    others.forEach((p) => {
-      timers.push(setTimeout(() => { if (S.phase === 'lobby_' + k) setReady(p); }, Math.round(randFloat(0.8, CONFIG.lobbyMaxSec) * 1000)));
+    // Simulated players get ready after "reading" the rules: each has a
+    // fixed personal reading speed (consistent across rounds), scaled to
+    // how long this round's rules are. One straggler is always held until a
+    // few seconds after the participant is ready, so the participant is
+    // never simply the last one everyone was waiting for.
+    const [readLo, readHi] = CONFIG.lobbyMaxSec ? [CONFIG.lobbyMaxSec * 0.35, CONFIG.lobbyMaxSec] : LOBBY_READ_SEC[k];
+    const plan = others.map((p) => ({ p, at: (readLo + (readHi - readLo) * readerSpeed(p.id) * randFloat(0.85, 1.15)) * 1000 }));
+    plan.sort((a, b) => a.at - b.at);
+    const straggler = plan.length ? plan[plan.length - 1] : null;
+    plan.forEach((x) => {
+      if (x === straggler) return;
+      timers.push(setTimeout(() => { if (S.phase === 'lobby_' + k) setReady(x.p); }, Math.round(x.at)));
     });
     document.getElementById('ready-btn').addEventListener('click', (e) => {
       e.target.disabled = true;
       e.target.textContent = "You're ready ✓";
       rec.selfReadyAfterMs = Date.now() - opened;
       setReady(S.roster.find((p) => p.isReal));
+      if (straggler) {
+        const sinceOpen = Date.now() - opened;
+        const extra = Math.min(5, Math.max(1.5, (readHi - readLo) * 0.15)) * 1000 * randFloat(0.7, 1.3);
+        const when = Math.max(straggler.at - sinceOpen, extra);
+        timers.push(setTimeout(() => { if (S.phase === 'lobby_' + k) setReady(straggler.p); }, Math.round(when)));
+      }
     });
   }
 
