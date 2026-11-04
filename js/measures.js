@@ -147,7 +147,7 @@ window.OutcomeMeasures = (function () {
     const privacy = 'Only you know about these gold coins: no other participant knows they exist, and no one else will see how you allocate them. You alone decide how to allocate them among the participants in this study, including yourself.';
     const sep = afterContest ? ' These gold coins have nothing to do with the points in the contest you just played.' : '';
     return mode === 'fixed50'
-      ? `You have found ${B} gold coins. ${privacy} The total is fixed at ${B} gold coins: giving more gold coins to one participant leaves fewer for the others.${sep}`
+      ? `You have found ${B} gold coins. ${privacy} The total is fixed at ${B} gold coins, so giving more gold coins to one participant leaves fewer to share among the other participants — some of them may then receive fewer.${sep}`
       : `You have found a supply of gold coins. ${privacy} The supply is unlimited: how many gold coins you give to one participant does not affect how many the others can receive.${sep}`;
   }
 
@@ -161,7 +161,7 @@ window.OutcomeMeasures = (function () {
     const rows = orderedRoster(roster);
 
     const allocIntro = mode === 'fixed50'
-      ? `Now, you will distribute the ${budgetFor(roster)} gold coins among all participants, including yourself. Please note that the total number of gold coins available is fixed — when you allocate more gold coins to some participants, fewer gold coins will be available for other participants. Please follow these rules: for each participant, you can allocate between 0 and ${MAX_EACH} gold coins (inclusive). You need to make allocation decisions for each participant separately, and you must allocate all ${budgetFor(roster)} gold coins — no more and no less. Please complete the allocation according to your true preferences.`
+      ? `Now, you will distribute the ${budgetFor(roster)} gold coins among all participants, including yourself. Please note that the total number of gold coins is fixed — allocating more gold coins to some participants leaves fewer to share among the others, which may mean that some participants receive fewer. Please follow these rules: for each participant, you can allocate between 0 and ${MAX_EACH} gold coins (inclusive). You need to make allocation decisions for each participant separately, and you must allocate all ${budgetFor(roster)} gold coins — no more and no less. Please complete the allocation according to your true preferences.`
       : 'Now, you need to allocate gold coins to all participants, including yourself. Please follow these rules: for each participant, you can allocate between 0 and 10 gold coins (inclusive). You need to make allocation decisions for each participant separately. Please allocate according to your true preferences — there is no right or wrong answer.';
 
     // Each participant gets a − / number / + stepper (0-10). Every row
