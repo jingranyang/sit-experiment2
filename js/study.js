@@ -475,6 +475,7 @@
     }
     if (!CONFIG.helpEnabled) params.set('help', '0');
     if (qs.get('helpReceiveInterval')) params.set('helpReceiveInterval', qs.get('helpReceiveInterval'));
+    ['lobbyMax', 'lobbyCountdown'].forEach((k) => { if (qs.get(k)) params.set(k, qs.get(k)); });
     if (CONFIG.debug) params.set('debug', '1');
 
     // Full-window frame, so the game's fixed (non-scrolling) layout gets

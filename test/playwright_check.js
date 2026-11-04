@@ -468,6 +468,21 @@ async function h1Now(ctx, text) {
   return h.includes(text);
 }
 
+// Ready lobby before a contest round: everyone starts "Waiting…", the
+// participant clicks ready, simulated players get ready over time, and the
+// round starts on its own once all are ready.
+async function lobbyAndStart(f, tag, round, mode) {
+  await f.waitForSelector('#ready-btn', { timeout: 8000 });
+  const n = mode === 'group' ? 10 : 2;
+  assert((await f.locator('.ready-chip').count()) === n, `${tag}: Round ${round} lobby lists all ${n} players`);
+  await f.click('#ready-btn');
+  assert(await f.locator('#ready-btn').isDisabled(), `${tag}: Round ${round} lobby marks the participant ready`);
+  const allReady = await waitUntil(async () => (await f.locator('.ready-chip.on').count()) === n, 6000);
+  assert(allReady, `${tag}: Round ${round} lobby — every simulated player becomes ready`);
+  const started = await waitUntil(async () => (await f.locator('#tug-knot').count()) > 0, 6000);
+  assert(started, `${tag}: Round ${round} starts automatically once all players are ready`);
+}
+
 // Condition 3 = Experiment 3 "Intergroup Conflict Contest": the same three
 // game.html tasks as Condition 2, in contest mode (tug-of-war rope, scripted
 // opposing side, preset-only team chat in the group arm). Plays one arm of
@@ -479,15 +494,22 @@ async function playContestArm(browser, mode, outcome, order, extraParams = '') {
   page.on('pageerror', (e) => consoleErrors.push(String(e)));
   page.on('console', (msg) => { if (msg.type() === 'error') consoleErrors.push(msg.text()); });
 
-  await page.goto(`${BASE}/?pid=FLOW_C3_${mode}_${outcome}&condition=3&contestMode=${mode}&outcome=${outcome}&order=${order}&group=B&ingroup=4&outgroup=5&duration=40&diffDuration=25&linkDuration=25&difficulty=easy&diffDifficulty=easy&linkDifficulty=easy&helpThreshold=3&helpReceiveInterval=6&debug=1${extraParams}`);
+  await page.goto(`${BASE}/?pid=FLOW_C3_${mode}_${outcome}&condition=3&contestMode=${mode}&outcome=${outcome}&order=${order}&group=B&ingroup=4&outgroup=5&duration=40&diffDuration=25&linkDuration=25&difficulty=easy&diffDifficulty=easy&linkDifficulty=easy&helpThreshold=3&helpReceiveInterval=6&lobbyMax=3&lobbyCountdown=1&debug=1${extraParams}`);
   await fillEntryAndContinue(page);
   assert((await page.locator('#demo-continue-btn').count()) === 0, `${tag}: no background questions before the game`);
   await page.waitForSelector('#game-frame', { timeout: 5000 });
   let f = null;
   await waitUntil(async () => { f = page.frames().find((x) => x.url().includes('game.html')); return !!f; }, 5000);
-  const reachedIntro = await waitUntil(() => h1Includes(f, 'Tug-of-War Contest'), 5000);
+  const reachedIntro = await waitUntil(() => h1Includes(f, 'How the Contest Works'), 5000);
   assert(reachedIntro, `${tag}: game.html opens in contest mode with the contest instructions`);
-  await f.click('#start-btn');
+  const overviewText = await f.locator('.card').first().textContent();
+  assert(/Calculation/.test(overviewText) && /Spot the Difference/.test(overviewText) && /Match Pairs/.test(overviewText) && /Winner takes all/i.test(overviewText) && /10 points/.test(overviewText), `${tag}: overview explains all three rounds, scoring, starting points and winner-takes-all`);
+  assert(mode === 'group' ? /chat with your own group/.test(overviewText) : !/chat/.test(overviewText), `${tag}: overview ${mode === 'group' ? 'mentions' : 'omits'} the team chat`);
+  await f.click('#overview-continue-btn');
+  const assignH1 = await f.locator('h1').first().textContent();
+  assert(mode === 'group' ? /randomly assigned to\s+Group B/.test(assignH1) : /paired with Participant/.test(assignH1), `${tag}: assignment screen shows the assigned ${mode === 'group' ? 'group' : 'opponent'} (got "${assignH1}")`);
+  await f.click('#assign-continue-btn');
+  await lobbyAndStart(f, tag, 1, mode);
   await f.waitForSelector('#tug-knot', { timeout: 5000 });
   assert((await f.locator('.chat-preset-btn').count()) === (mode === 'group' ? 5 : 0), `${tag}: ${mode === 'group' ? 'team chat shows exactly the 5 preset messages' : 'no chat in the individual arm'}`);
   assert((await f.locator('textarea, input[type="text"]').count()) === 0, `${tag}: no free-text chat input exists`);
@@ -528,6 +550,7 @@ async function playContestArm(browser, mode, outcome, order, extraParams = '') {
   const r1 = await f.locator('h1').first().textContent();
   assert((order === 'WL' ? /won Round 1/ : /lost Round 1/).test(r1), `${tag}: Round 1 result matches order ${order} (got "${r1}")`);
   await f.click('#next-round-btn');
+  await lobbyAndStart(f, tag, 2, mode);
   // Round 2: spot the difference, one difference clicked every ~2s.
   while (!(await h1Now(f, 'Round 2'))) {
     const round = await f.evaluate(() => window.__sitDebug.state.diff.round).catch(() => null);
@@ -543,6 +566,7 @@ async function playContestArm(browser, mode, outcome, order, extraParams = '') {
   assert(tiedPoints.own === 10 && tiedPoints.opp === 10, `${tag}: both sides are tied at 10 points going into the final round (got ${JSON.stringify(tiedPoints)})`);
   assert((await f.locator('text=winner takes all').count()) > 0, `${tag}: the between-round screen announces Round 3 is winner-takes-all`);
   await f.click('#next-round-btn');
+  await lobbyAndStart(f, tag, 3, mode);
   // Round 3: match pairs, one pair every ~1.5s.
   while (!(await h1Now(f, 'the contest'))) {
     const pair = await f.evaluate(() => { const b = window.__sitDebug.state.link.board; return b ? window.LinkMatch.findValidPair(b) : null; }).catch(() => null);

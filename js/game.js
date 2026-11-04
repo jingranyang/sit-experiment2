@@ -127,6 +127,10 @@
     contestOutcome: qs.get('outcome') === 'win' ? 'win' : 'lose', // final (Round 3) result
     contestOrder: qs.get('order') === 'LW' ? 'LW' : 'WL',          // Rounds 1-2: win-then-lose or lose-then-win
     selfLabel: clampInt(qs.get('selfLabel'), 0, 0, 999),
+    // Ready lobby before each contest round: simulated players click
+    // "ready" at random times within this many seconds (default 9).
+    lobbyMaxSec: clampInt(qs.get('lobbyMax'), 9, 1, 60),
+    lobbyCountdownSec: clampInt(qs.get('lobbyCountdown'), 3, 0, 10),
     oppLabel: clampInt(qs.get('oppLabel'), 0, 0, 999),
   };
   // Experiment 3 individual arm: one-on-one, no teammates, no help, no chat.
@@ -817,6 +821,7 @@
         finalPointsOpposing: C.points.opp,
         rounds: C.rounds,
         trajectory: C.trajectory,
+        lobbies: C.lobbies || [],
         chat: isGroup ? { log: C.chat, selfSentTotal: Object.values(C.chatSentCounts).reduce((a, b) => a + b, 0), selfSentByMessage: C.chatSentCounts } : null,
       };
     }
@@ -842,8 +847,11 @@
   // pinned on top (and the team chat below, group arm only); contest-
   // specific intro, between-round and results screens.
   function renderContest() {
-    document.body.classList.toggle('contest-playing', S.phase !== 'intro');
-    if (S.phase === 'intro') return renderContestIntro();
+    const fixedScreen = ROUND_TASKS.includes(S.phase) || ['math_done', 'diff_done', 'results'].includes(S.phase);
+    document.body.classList.toggle('contest-playing', fixedScreen);
+    if (S.phase === 'intro') return renderContestOverview();
+    if (S.phase === 'assign') return renderContestAssignment();
+    if (S.phase.startsWith('lobby_')) return renderContestLobby(S.phase.slice(6));
     if (S.phase === 'math_done') return renderRoundEnd('math', 'diff', startDiffTask);
     if (S.phase === 'diff_done') return renderRoundEnd('diff', 'link', startLinkTask);
     if (S.phase === 'results') return renderRoundEnd('link', null, null);
@@ -894,30 +902,172 @@
     link: '"Match Pairs" — click two matching tiles that can be connected by a path with at most two turns; every pair you match pulls the rope',
   };
 
-  function renderContestIntro() {
+  // ---- Contest opening: (1) how the contest works, (2) random group
+  // assignment, (3) a "ready" lobby before each round, then the round.
+  const ROUND_START = { math: () => startMathTask(), diff: () => startDiffTask(), link: () => startLinkTask() };
+  const ROUND_SCORING = {
+    math: (g) => `Solve simple arithmetic problems (addition, subtraction, multiplication). ${g ? 'The group with more correct answers' : 'Whoever has more correct answers'} wins the round.`,
+    diff: (g) => `Find all the differences between two pictures. Each picture pair you complete counts as 1. ${g ? 'The group with more completed pairs' : 'Whoever completes more pairs'} wins the round.`,
+    link: (g) => `Click two matching tiles that can be connected by a path with at most two turns. Each matched pair counts as 1. ${g ? 'The group with more matched pairs' : 'Whoever matches more pairs'} wins the round.`,
+  };
+  const ROUND_STAKES = {
+    math: (g) => (g ? 'Each member of the losing group gives 5 points to the winning group.' : 'The loser gives 5 points to the winner.'),
+    diff: (g) => (g ? 'Each member of the losing group gives 5 points to the winning group.' : 'The loser gives 5 points to the winner.'),
+    link: (g) => (g ? '<strong>Winner takes all:</strong> the losing group gives <em>all</em> of its points to the winning group.' : '<strong>Winner takes all:</strong> the loser gives <em>all</em> of their points to the winner.'),
+  };
+
+  // "How to play" for each game, shown on its ready screen so participants
+  // know the rules before the round starts.
+  const LINK_DEMO_SVG = `
+    <svg class="link-demo" viewBox="0 0 250 120" role="img" aria-label="Two stars connected by a line with two turns that goes around other tiles">
+      ${[0, 1, 2, 3, 4].map((c) => [0, 1].map((r) => `<rect x="${12 + c * 46}" y="${22 + r * 46}" width="38" height="38" rx="7" class="ld-tile"/>`).join('')).join('')}
+      <path d="M31 41 V10 H215 V41" class="ld-path"/>
+      <text x="31" y="47" class="ld-sym">⭐</text><text x="215" y="47" class="ld-sym">⭐</text>
+      <text x="77" y="47" class="ld-sym">🔴</text><text x="123" y="47" class="ld-sym">🟢</text><text x="169" y="47" class="ld-sym">🔵</text>
+      <text x="31" y="93" class="ld-sym">🟡</text><text x="77" y="93" class="ld-sym">🟣</text><text x="123" y="93" class="ld-sym">🔴</text><text x="169" y="93" class="ld-sym">🟡</text><text x="215" y="93" class="ld-sym">🟢</text>
+    </svg>`;
+  const HOW_TO_PLAY = {
+    math: () => `<ul class="rules-list">
+        <li>A problem appears in the middle of the screen, e.g. <strong>7 × 6 = ?</strong></li>
+        <li>Type your answer and press <strong>Enter</strong>. A new problem appears after every answer.</li>
+        <li>Every correct answer pulls the rope toward your side.</li>
+      </ul>`,
+    diff: () => `<ul class="rules-list">
+        <li>Two pictures appear side by side. They are the same except for a few shapes that are <strong>recolored, resized, moved, or missing</strong>.</li>
+        <li><strong>Click</strong> on a difference (in either picture) to mark it. The counter above the pictures shows how many you have found.</li>
+        <li>When you have found all the differences, a new pair appears. Every completed pair pulls the rope toward your side.</li>
+      </ul>`,
+    link: () => `<ul class="rules-list">
+        <li>Click <strong>two identical tiles</strong> to clear them.</li>
+        <li>They clear only if they can be <strong>connected by a line with at most two turns</strong> that does not pass through other tiles. The line may run around the outside edge of the board.</li>
+        <li>If a pair can't be connected yet, clear other tiles first to open a path. When the board is empty, a new one appears.</li>
+        <li>Every matched pair pulls the rope toward your side.</li>
+      </ul>
+      <div class="link-demo-wrap">${LINK_DEMO_SVG}<p class="muted">Example: the two ⭐ tiles can be cleared — the line goes up, across, and down (two turns) around the other tiles.</p></div>`,
+  };
+
+  function renderContestOverview() {
     const g = CONTEST.isGroup;
-    const opp = S.roster.find((p) => p.groupLabel === CONTEST.other);
-    const side = g ? 'team' : 'side';
+    const rounds = ROUND_TASKS.map((k, i) => `
+      <li><strong>Round ${i + 1} — ${esc(ROUND_NAMES[k])}.</strong> ${ROUND_SCORING[k](g)} ${ROUND_STAKES[k](g)}</li>`).join('');
     app.innerHTML = `
       <div class="card">
-        <h1>Tug-of-War Contest</h1>
-        ${g
-          ? `<p>You have been assigned to <span class="badge ${S.group === 'A' ? 'a' : 'b'}">Group ${esc(S.group)}</span>. Your team will compete against Group ${esc(CONTEST.other)}.</p>`
-          : `<p>You will compete one-on-one against another participant (Participant ${esc(opp ? opp.label : '?')}).</p>`}
-        <p>The contest has <strong>three rounds</strong>, each its own tug-of-war: Round 1 is a calculation challenge, Round 2 is "Spot the Difference", Round 3 is "Match Pairs". Every problem ${g ? 'your team solves' : 'you solve'} pulls the rope toward ${g ? 'your team' : 'you'}; every problem the other side solves pulls it the other way. Whoever has pulled the rope to their side when the round's time runs out wins that round.</p>
-        <div class="notice mt">
-          <strong>Points.</strong> ${g ? 'Every participant' : 'You and your opponent each'} start with <strong>10 points</strong>.
-          <ul class="rules-list">
-            <li><strong>Rounds 1 and 2:</strong> ${g ? 'each member of the losing team gives 5 points to the winning team.' : 'the loser gives 5 points to the winner.'}</li>
-            <li><strong>Round 3 — winner takes all:</strong> ${g ? 'the losing team gives <em>all</em> of its points to the winning team.' : 'the loser gives <em>all</em> of their points to the winner.'}</li>
-          </ul>
-        </div>
-        ${g ? `<p class="mt"><strong>Helping your team:</strong> every ${CONFIG.helpThreshold} problems you complete earn you a chance to help a teammate of your choice, and teammates can help you too. You can also send messages to your team with the message buttons.</p>` : ''}
-        <p class="muted mt">There is no cooperation between the two ${side}s: any point one ${side} gains is a point the other ${side} loses.</p>
+        <h1>How the Contest Works</h1>
+        <p>${g
+          ? 'You will be randomly assigned to one of two groups (Group A or Group B). The two groups will compete against each other in <strong>three rounds</strong>.'
+          : 'You will be paired with another participant, and the two of you will compete one-on-one in <strong>three rounds</strong>.'}</p>
+        <p>Everyone starts with <strong>10 points</strong>. In each round, a tug-of-war at the top of the screen shows who is ahead.</p>
+        <ol class="rules-list rounds-list">${rounds}</ol>
+        ${g ? `<p class="mt">During the contest you can <strong>chat with your own group</strong> by choosing from a set of messages, and every ${CONFIG.helpThreshold} problems you complete earn you a chance to <strong>help a teammate</strong>.</p>` : ''}
+        <button id="overview-continue-btn" class="mt" style="width:100%;">Continue</button>
+      </div>`;
+    document.getElementById('overview-continue-btn').addEventListener('click', () => { S.phase = 'assign'; render(); });
+  }
+
+  function renderContestAssignment() {
+    const g = CONTEST.isGroup;
+    const opp = S.roster.find((p) => p.groupLabel === CONTEST.other);
+    app.innerHTML = g ? `
+      <div class="card center">
+        <h1>You have been randomly assigned to <span class="badge ${S.group === 'A' ? 'a' : 'b'}">Group ${esc(S.group)}</span></h1>
+        <p class="muted">Your ID: Participant ${esc(S.label)}. Your group will compete against Group ${esc(CONTEST.other)}.</p>
       </div>
-      ${g ? `<div class="card"><h2>Team Roster</h2>${renderRosterColumns()}</div>` : ''}
-      <div class="card"><button id="start-btn" style="width:100%;">Start Round 1: Calculation</button></div>`;
-    document.getElementById('start-btn').addEventListener('click', startMathTask);
+      <div class="card">
+        <h2>Groups</h2>
+        ${renderRosterColumns()}
+        <button id="assign-continue-btn" class="mt" style="width:100%;">Continue</button>
+      </div>` : `
+      <div class="card center">
+        <h1>You have been paired with Participant ${esc(opp ? opp.label : '?')}</h1>
+        <p class="muted">Your ID: Participant ${esc(S.label)}. You will compete one-on-one against Participant ${esc(opp ? opp.label : '?')}.</p>
+        <button id="assign-continue-btn" class="mt" style="width:100%;">Continue</button>
+      </div>`;
+    document.getElementById('assign-continue-btn').addEventListener('click', () => { S.phase = 'lobby_math'; render(); });
+  }
+
+  // Ready lobby: every player is listed as "Waiting…" until they click
+  // ready. Simulated players get ready at random times; once the
+  // participant and everyone else are ready, a short countdown starts the
+  // round automatically.
+  function renderContestLobby(k) {
+    const g = CONTEST.isGroup;
+    const n = ROUND_TASKS.indexOf(k) + 1;
+    const others = S.roster.filter((p) => !p.isReal);
+    const opened = Date.now();
+    const ready = {};
+    const timers = [];
+    const rec = { round: n, task: k, openedAt: new Date(opened).toISOString(), selfReadyAfterMs: null, allReadyAfterMs: null };
+    CONTEST.state.lobbies = CONTEST.state.lobbies || [];
+    CONTEST.state.lobbies.push(rec);
+
+    const statusCell = (p) => `<span class="ready-chip ${ready[p.id] ? 'on' : ''}" id="ready-${esc(p.id)}">${ready[p.id] ? 'Ready ✓' : 'Waiting…'}</span>`;
+    const row = (p) => `<li class="member-row ${p.isReal ? 'me' : ''}"><span>Participant ${esc(p.label)}${p.isReal ? ' (you)' : ''}</span>${statusCell(p)}</li>`;
+    const col = (team, cls, title) => `
+      <div class="team-col ${cls}">
+        <h3>${title}</h3>
+        <ul class="member-list">${S.roster.filter((p) => p.groupLabel === team).sort((a, b) => a.label - b.label).map(row).join('')}</ul>
+      </div>`;
+    app.innerHTML = `
+      <div class="card center">
+        <div class="tug-round">Round ${n} of 3</div>
+        <h1>${esc(ROUND_NAMES[k])}</h1>
+        <p class="lead">${ROUND_SCORING[k](g)} ${ROUND_STAKES[k](g)}</p>
+        <div class="how-to-play"><h3>How to play</h3>${HOW_TO_PLAY[k]()}${g ? `<p class="muted" style="margin:6px 0 0;">Your team chat and the help panel are on the sides of the screen during the round.</p>` : ''}</div>
+        <div class="notice">${CONTEST.pointsLine()}</div>
+        <p class="mt">Take your time to read the rules. Click <strong>I'm ready</strong> when you are ready to start — the round begins as soon as all players are ready.</p>
+        <button id="ready-btn" class="mt" style="width:100%;">I'm ready</button>
+        <p class="lobby-status mt" id="lobby-status">Waiting for players…</p>
+      </div>
+      <div class="card">
+        <h2>Players</h2>
+        <div class="team-columns">
+          ${col(S.group, 'a', g ? `Group ${esc(S.group)} (your group)` : 'You')}
+          ${col(CONTEST.other, 'b', g ? `Group ${esc(CONTEST.other)}` : 'Your opponent')}
+        </div>
+      </div>`;
+
+    function setReady(p) {
+      ready[p.id] = true;
+      const el = document.getElementById('ready-' + p.id);
+      if (el) { el.textContent = 'Ready ✓'; el.classList.add('on'); }
+      updateStatus();
+    }
+    function updateStatus() {
+      const waiting = S.roster.filter((p) => !ready[p.id]);
+      const st = document.getElementById('lobby-status');
+      if (!st) return;
+      if (waiting.length === 0) return startCountdown();
+      const names = waiting.filter((p) => !p.isReal).map((p) => `Participant ${p.label}`);
+      st.textContent = ready.self
+        ? `${S.roster.length - waiting.length} of ${S.roster.length} players ready — waiting for ${names.join(', ')}…`
+        : `${S.roster.length - waiting.length} of ${S.roster.length} players ready.`;
+    }
+    let started = false;
+    function startCountdown() {
+      if (started) return;
+      started = true;
+      rec.allReadyAfterMs = Date.now() - opened;
+      const st = document.getElementById('lobby-status');
+      let c = CONFIG.lobbyCountdownSec;
+      const tick = () => {
+        if (S.phase !== 'lobby_' + k) return;
+        if (c <= 0) { ROUND_START[k](); return; }
+        if (st) st.innerHTML = `<strong>All players are ready!</strong> Starting in ${c}…`;
+        c--;
+        timers.push(setTimeout(tick, 1000));
+      };
+      tick();
+    }
+    // Simulated players get ready at random times, spread over the window.
+    others.forEach((p) => {
+      timers.push(setTimeout(() => { if (S.phase === 'lobby_' + k) setReady(p); }, Math.round(randFloat(0.8, CONFIG.lobbyMaxSec) * 1000)));
+    });
+    document.getElementById('ready-btn').addEventListener('click', (e) => {
+      e.target.disabled = true;
+      e.target.textContent = "You're ready ✓";
+      rec.selfReadyAfterMs = Date.now() - opened;
+      setReady(S.roster.find((p) => p.isReal));
+    });
   }
 
   function roundResultText(r) {
@@ -1007,7 +1157,8 @@
         document.body.classList.remove('contest-playing');
         app.innerHTML = '<div class="card center"><p class="muted">Loading the next part…</p></div>';
       } else {
-        startFn();
+        S.phase = 'lobby_' + nextKey;
+        render();
       }
     });
   }
@@ -1080,7 +1231,7 @@
     const teamB = S.roster.filter((p) => p.groupLabel === 'B');
     const col = (team, list, cls) => `
       <div class="team-col ${cls}">
-        <h3>Group ${team}</h3>
+        <h3>Group ${team}${CONTEST && team === S.group ? ' (your group)' : ''}</h3>
         <ul class="member-list">
           ${list.map((p) => `<li class="member-row ${p.id === 'self' ? 'me' : ''}"><span>Participant ${p.label}${p.id === 'self' ? ' (you)' : ''}</span></li>`).join('')}
         </ul>
