@@ -384,10 +384,6 @@
   // kept here for reuse, though Condition 3 no longer routes through it.)
   // =======================================================================
   function renderTaskIntro() {
-    const unlimited = S.allocMode === 'unlimited';
-    const resourceParagraph = unlimited
-      ? 'During this task, you and members of your group are participating in a community decision-making process. You have discovered an unlimited supply of gold coins that can be used to support individuals and improve people’s well-being. Please pay attention, other participants are not informed about the total number of gold coins available. Since the number of gold coins is unlimited, how many gold coins you allocate to one participant does not affect how many gold coins other participants receive.'
-      : 'During this task, you and members of your group are participating in a community decision-making process. You have discovered 50 gold coins that can be used to support individuals and improve people’s well-being. Because the total number of gold coins is fixed, allocating more gold coins to one participant reduces the number of gold coins available to other participants. Please pay attention, other participants are not informed about the total number of gold coins available.';
 
     app.innerHTML = `
       ${progressBarHtml()}
@@ -396,7 +392,6 @@
         <p>In this task, we want to understand how people make decisions involving members of different groups in society.</p>
         <p>People often form social and political groups based on shared identities, values, or experiences. Understanding how group membership influences cooperation and resource allocation can help us better understand the foundations of social divisions and political polarization.</p>
         <p>You have been randomly assigned to one of two citizen groups. You belong to: <span class="badge ${S.group === 'A' ? 'a' : 'b'}">Group ${esc(S.group)}</span></p>
-        <p>${esc(resourceParagraph)}</p>
       </div>
       <div class="card">
         <h2>Your Group</h2>
@@ -529,9 +524,9 @@
   // =======================================================================
   function measuresCtx() {
     // Same roster/group as assigned at the start and used in the games.
-    // Conditions 2-3 get the allocation scenario here (Condition 1 already
-    // saw it on its task-instructions screen).
-    const ctx = { roster: S.roster, group: S.group, showScenario: S.condition !== 1 };
+    // Every condition reads the same (abstract) allocation scenario at the
+    // top of the Allocation Task.
+    const ctx = { roster: S.roster, group: S.group, showScenario: true };
     if (S.condition === 3) {
       ctx.contest = { mode: S.contestMode, outcome: S.contestPayload && S.contestPayload.contest ? S.contestPayload.contest.realizedOutcome : S.contestOutcome };
       if (S.contestMode === 'individual') ctx.individual = { opponentLabel: S.opponentLabel };

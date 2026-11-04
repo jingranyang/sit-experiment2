@@ -345,8 +345,8 @@ async function fillEntryAndContinue(page) {
 // The questionnaire shows one question per page (Previous / Next). These
 // helpers answer whatever page is visible and click Next until the debrief.
 const CORRECT_COMP = {
-  unlimited: { q5: 'Unlimited', q6: 'The gold coins other participants receive will not be affected' },
-  fixed50: { q5: 'Fixed at 50 coins', q6: 'Must be exactly 50 coins', q7: 'May require reducing gold coins allocated to others', q8: 'Since the total is limited, trade-offs between participants may be needed' },
+  unlimited: { qp: 'Only me', q5: 'Unlimited', q6: 'The gold coins other participants receive will not be affected' },
+  fixed50: { qp: 'Only me', q5: 'Fixed at 50 coins', q6: 'Must be exactly 50 coins', q7: 'May require reducing gold coins allocated to others', q8: 'Since the total is limited, trade-offs between participants may be needed' },
 };
 
 async function currentQid(page) {
@@ -426,6 +426,8 @@ async function testFullFlowCondition1(browser) {
 
   // Pager behaviour: Next is blocked until the page is answered; Previous
   // goes back with answers kept.
+  const scen = await page.locator('.notice.scenario').textContent();
+  assert(/Only you know about these gold coins/.test(scen) && /no one else will see how you allocate/.test(scen) && !/community/.test(scen), `scenario: abstract wording that only the participant knows about the coins (got "${scen}")`);
   assert(await page.locator('#pg-prev').isDisabled(), 'pager: Previous is disabled on the first page');
   await page.click('#pg-next');
   assert((await page.locator('#pg-error:not(.hidden)').count()) === 1 && (await currentQid(page)) === 'alloc', 'pager: Next is blocked until the allocation page is complete');

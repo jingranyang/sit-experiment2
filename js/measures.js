@@ -25,6 +25,12 @@ window.OutcomeMeasures = (function () {
   function budgetFor(roster) { return 5 * roster.length; }
   const UNLIMITED_COMPREHENSION = [
     {
+      id: 'qp',
+      prompt: 'In this task, who knows about the gold coins and how you allocate them?',
+      options: ['Only me', 'All participants', 'Some of the other participants'],
+      correct: 'Only me',
+    },
+    {
       id: 'q5',
       prompt: 'In this task, the number of gold coins is:',
       options: ['Limited', 'Unlimited', 'Uncertain'],
@@ -43,6 +49,12 @@ window.OutcomeMeasures = (function () {
   ];
 
   const FIXED50_COMPREHENSION = (B) => [
+    {
+      id: 'qp',
+      prompt: 'In this task, who knows about the gold coins and how you allocate them?',
+      options: ['Only me', 'All participants', 'Some of the other participants'],
+      correct: 'Only me',
+    },
     {
       id: 'q5',
       prompt: 'In the current task, what is the total number of gold coins?',
@@ -125,12 +137,18 @@ window.OutcomeMeasures = (function () {
   // show it here, right before the allocation, once the games are over.
   // The group assignment is the one made at the start of the study and used
   // throughout the games — nothing is re-randomized here.
+  // Allocation scenario: deliberately abstract (no community, political or
+  // real-world framing). It establishes that ONLY the participant knows
+  // about the gold coins, that they alone decide how to allocate them, and
+  // that no one else will see the allocation — to isolate allocation from
+  // social pressure and social comparison. Same text in all experiments;
+  // the only difference is unlimited vs. a fixed total.
   function scenarioText(mode, individual, afterContest, B) {
-    const who = individual ? 'you and the other participants in this study are' : 'you and members of your group are';
-    const sep = afterContest ? ' These gold coins are separate from the points in the contest you just played.' : '';
+    const privacy = 'Only you know about these gold coins: no other participant knows they exist, and no one else will see how you allocate them. You alone decide how to allocate them among the participants in this study, including yourself.';
+    const sep = afterContest ? ' These gold coins have nothing to do with the points in the contest you just played.' : '';
     return mode === 'fixed50'
-      ? `During this task, ${who} participating in a community decision-making process. You have discovered ${B} gold coins that can be used to support individuals and improve people’s well-being. Because the total number of gold coins is fixed, allocating more gold coins to one participant reduces the number of gold coins available to other participants. Please pay attention, other participants are not informed about the total number of gold coins available.${sep}`
-      : `During this task, ${who} participating in a community decision-making process. You have discovered an unlimited supply of gold coins that can be used to support individuals and improve people’s well-being. Please pay attention, other participants are not informed about the total number of gold coins available. Since the number of gold coins is unlimited, how many gold coins you allocate to one participant does not affect how many gold coins other participants receive.${sep}`;
+      ? `You have found ${B} gold coins. ${privacy} The total is fixed at ${B} gold coins: giving more gold coins to one participant leaves fewer for the others.${sep}`
+      : `You have found a supply of gold coins. ${privacy} The supply is unlimited: how many gold coins you give to one participant does not affect how many the others can receive.${sep}`;
   }
 
   function renderHtml(mode, ctx) {
