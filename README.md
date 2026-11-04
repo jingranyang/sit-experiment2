@@ -18,7 +18,7 @@ The three experimental conditions:
 
    Then the same Allocation Task and measures (in the individual arm the table has no Group column, the identification question is skipped, and the affect questions ask about the other participants vs. the contest opponent). See [STUDY_FLOW.md](./STUDY_FLOW.md) for details.
 
-Condition 1's instructions, and the allocation task, identification/affect scales, and comprehension-check questions, use the exact wording from the KU POLS proposal (sections 5.1/5.2). The previous fixed-10-coin allocation framing is still available for condition 3 with `?exp3Alloc=fixed10`. The consent text in the Entry stage is **placeholder language only** — it has not been IRB-reviewed; replace it before fielding a real study (see the in-page warning banner and comments at the top of `js/study.js`).
+Condition 1's instructions, and the allocation task, identification/affect scales, and comprehension-check questions, use the exact wording from the KU POLS proposal (sections 5.1/5.2). Condition 3 uses the fixed-10-coin (scarce resources) allocation after the contest; `?exp3Alloc=unlimited` switches it to the unlimited framing. The consent text in the Entry stage is **placeholder language only** — it has not been IRB-reviewed; replace it before fielding a real study (see the in-page warning banner and comments at the top of `js/study.js`).
 
 - Supported URL parameters, the final data payload shape, and all assumptions worth double-checking: see [STUDY_FLOW.md](./STUDY_FLOW.md)
 - Saving results to Google Sheets: see [GOOGLE_SHEETS_SETUP.md](./GOOGLE_SHEETS_SETUP.md)

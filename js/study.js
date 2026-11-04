@@ -35,7 +35,7 @@
   //   contestMode      Condition 3: force 'group' | 'individual'
   //   outcome          Condition 3: force the final round's result 'win' | 'lose'
   //   order            Condition 3: force Rounds 1-2 order 'WL' | 'LW'
-  //   exp3Alloc        Condition 3: 'fixed10' for the fixed-10-coin
+  //   exp3Alloc        Condition 3: 'unlimited' for the unlimited-coins
   //                    allocation framing (default 'unlimited')
   //   group            force 'A' | 'B' for the real participant's team
   //   ingroup/outgroup simulated-teammate/opponent counts (default 4 / 5,
@@ -60,10 +60,11 @@
   const EXP2_ALLOCATION_MODE = 'unlimited';
 
   // Experiment 3 (Condition 3, "Intergroup Conflict Contest"): allocation
-  // framing used AFTER the tug-of-war contest. Defaults to 'unlimited' so
-  // the only difference from Experiment 1's no-conflict baseline is the
-  // zero-sum contest itself (not resource scarcity in the allocation).
-  // Override per link with ?exp3Alloc=fixed10.
+  // framing used AFTER the tug-of-war contest. Defaults to 'fixed10'
+  // (scarce resources: 10 gold coins, allocating more to one participant
+  // leaves less for others) — after intergroup competition, does a real
+  // trade-off bring out discrimination and negative affect? Override per
+  // link with ?exp3Alloc=unlimited.
 
   function esc(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -104,7 +105,7 @@
     contestMode: ['group', 'individual'].includes(qs.get('contestMode')) ? qs.get('contestMode') : null,
     contestOutcome: ['win', 'lose'].includes(qs.get('outcome')) ? qs.get('outcome') : null,
     contestOrder: ['WL', 'LW'].includes((qs.get('order') || '').toUpperCase()) ? qs.get('order').toUpperCase() : null,
-    exp3AllocMode: qs.get('exp3Alloc') === 'fixed10' ? 'fixed10' : 'unlimited',
+    exp3AllocMode: qs.get('exp3Alloc') === 'unlimited' ? 'unlimited' : 'fixed10',
     debug: qs.get('debug') === '1',
     // ?allowMobile=1 skips the computer-only check (for previewing on a phone).
     allowMobile: qs.get('allowMobile') === '1',
