@@ -177,7 +177,7 @@ window.OutcomeMeasures = (function () {
         <td>
           <div class="stepper" data-alloc-label="${p.label}">
             <button type="button" class="step-btn minus" data-step="-1" aria-label="One fewer gold coin for Participant ${esc(p.label)}">−</button>
-            <span class="step-val unset" id="alloc-val-${p.label}">–</span>
+            <input type="text" inputmode="numeric" maxlength="2" autocomplete="off" class="step-val unset" id="alloc-val-${p.label}" placeholder="–" aria-label="Gold coins for Participant ${esc(p.label)} (0–${MAX_EACH})" />
             <button type="button" class="step-btn plus" data-step="1" aria-label="One more gold coin for Participant ${esc(p.label)}">+</button>
           </div>
         </td>
@@ -223,7 +223,7 @@ window.OutcomeMeasures = (function () {
           <tbody>${rowsHtml}</tbody>
         </table>
         </div>
-        <p class="muted step-help">Use − and + to set each participant's gold coins. Press − once to give 0.</p>`);
+        <p class="muted step-help">Type a number from 0 to ${MAX_EACH} in each box, or use − and +. (Pressing − on an empty box gives 0.)</p>`);
 
     const sliderPages = individual
       ? page('ingroupAffect', `<h2>Feelings Toward Other Participants</h2>${sliderBlock('ingroupAffect', 'How do you feel toward the other participants in this study (other than your contest opponent)?', 'Please rate based on your true feelings.', 'Very unfavorable', 'Very favorable')}`)
@@ -262,7 +262,8 @@ window.OutcomeMeasures = (function () {
         const v = state.allocations[st.dataset.allocLabel];
         const set = typeof v === 'number';
         const valEl = st.querySelector('.step-val');
-        valEl.textContent = set ? String(v) : '–';
+        const shown = set ? String(v) : '';
+        if (valEl.value !== shown) valEl.value = shown;
         valEl.classList.toggle('unset', !set);
         st.querySelector('.minus').disabled = set && v <= 0;
         st.querySelector('.plus').disabled = (set && v >= MAX_EACH) || (fixed && sum >= BUDGET);
@@ -283,6 +284,36 @@ window.OutcomeMeasures = (function () {
           refreshSteppers();
         });
       });
+      // Typing: digits only, 0-10; in the fixed budget, never more than
+      // what is left (the value is lowered to the maximum still available,
+      // with a short note). An empty box means "not set yet".
+      const input = st.querySelector('.step-val');
+      const note = document.createElement('span');
+      note.className = 'step-note';
+      st.appendChild(note);
+      let noteTimer = null;
+      const flash = (msg) => {
+        note.textContent = msg;
+        note.classList.add('show');
+        if (noteTimer) clearTimeout(noteTimer);
+        noteTimer = setTimeout(() => note.classList.remove('show'), 2200);
+      };
+      input.addEventListener('input', () => {
+        const digits = input.value.replace(/[^0-9]/g, '');
+        if (digits === '') { delete state.allocations[label]; input.value = ''; refreshSteppers(); return; }
+        let n = parseInt(digits, 10);
+        if (n > MAX_EACH) { n = MAX_EACH; flash(`Max ${MAX_EACH}`); }
+        if (fixed) {
+          const cur = typeof state.allocations[label] === 'number' ? state.allocations[label] : 0;
+          const allowed = cur + (BUDGET - recomputeTotal());
+          if (n > allowed) { n = allowed; flash(`Only ${allowed} left`); }
+        }
+        state.allocations[label] = n;
+        state.allocationTyped = (state.allocationTyped || 0) + 1;
+        input.value = String(n);
+        refreshSteppers();
+      });
+      input.addEventListener('focus', () => input.select());
     });
     refreshSteppers();
 

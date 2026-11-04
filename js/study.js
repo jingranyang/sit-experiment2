@@ -694,7 +694,7 @@
       contestOrder: S.contestOrder,
       contest: S.contestPayload ? S.contestPayload.contest : null,
       allocationMode: S.allocMode,
-      allocation: { entries: allocEntries, total: allocTotal, budget: S.allocMode === 'fixed50' ? window.OutcomeMeasures.budgetFor(S.roster || []) : null, maxPerPerson: window.OutcomeMeasures.MAX_EACH, clicks: S.measures.allocationClicks || 0 },
+      allocation: { entries: allocEntries, total: allocTotal, budget: S.allocMode === 'fixed50' ? window.OutcomeMeasures.budgetFor(S.roster || []) : null, maxPerPerson: window.OutcomeMeasures.MAX_EACH, clicks: S.measures.allocationClicks || 0, typedEdits: S.measures.allocationTyped || 0 },
       // In the Experiment 3 individual arm there is no group: identification
       // is null, ingroupAffect = feelings toward the other (non-opponent)
       // participants, outgroupAffect = feelings toward the contest opponent.

@@ -367,7 +367,7 @@ async function fillAllocations(page, perPersonValue) {
     document.querySelectorAll('.q-page:not(.hidden) .stepper').forEach((st) => {
       const plus = st.querySelector('.plus');
       for (let i = 0; i < n && !plus.disabled; i++) plus.click();
-      out.push(st.querySelector('.step-val').textContent);
+      out.push(st.querySelector('.step-val').value);
     });
     return out;
   }, v);
@@ -431,6 +431,19 @@ async function testFullFlowCondition1(browser) {
   assert(await page.locator('#pg-prev').isDisabled(), 'pager: Previous is disabled on the first page');
   await page.click('#pg-next');
   assert((await page.locator('#pg-error:not(.hidden)').count()) === 1 && (await currentQid(page)) === 'alloc', 'pager: Next is blocked until the allocation page is complete');
+  // Typing directly into the number box.
+  const firstBox = page.locator('.q-page:not(.hidden) .stepper .step-val').first();
+  await firstBox.fill('7');
+  assert((await firstBox.inputValue()) === '7', 'number box: typing 7 sets 7');
+  await firstBox.fill('15');
+  assert((await firstBox.inputValue()) === '10', `number box: typing 15 is lowered to the maximum 10 (got ${await firstBox.inputValue()})`);
+  await firstBox.fill('a3');
+  assert((await firstBox.inputValue()) === '3', `number box: non-digits are ignored (typed "a3", got ${await firstBox.inputValue()})`);
+  await firstBox.fill('');
+  assert(await firstBox.evaluate((e) => e.classList.contains('unset')), 'number box: clearing it returns to "not set"');
+  await firstBox.fill('4');
+  await page.locator('.q-page:not(.hidden) .stepper').first().locator('.plus').click();
+  assert((await firstBox.inputValue()) === '5', 'number box: + still works after typing (4 → 5)');
   const maxed = await fillAllocations(page, 12);
   assert(maxed.every((x) => x === '10'), `steppers (unlimited): each participant tops out at 10 and there is no total cap (got ${maxed})`);
   assert((await page.locator('#alloc-total-line').count()) === 0, 'steppers (unlimited): no budget counter is shown');
@@ -439,7 +452,7 @@ async function testFullFlowCondition1(browser) {
   assert((await currentQid(page)) === 'identification', 'pager: Next moves to the identification page');
   await page.click('#pg-prev');
   assert((await currentQid(page)) === 'alloc', 'pager: Previous goes back to the allocation page');
-  const kept = await page.locator('.stepper .step-val:not(.unset)').allTextContents();
+  const kept = await page.$$eval('.stepper .step-val:not(.unset)', (els) => els.map((e) => e.value));
   assert(kept.length === 10 && kept.every((x) => x === '1'), `pager: allocation answers are kept after going back (got ${kept})`);
   const visited = await completeQuestionnaire(page, { alloc: 1, slider: 15, comp: CORRECT_COMP.unlimited });
   const firstDemo = visited.findIndex((q) => q.startsWith('demo-'));
@@ -627,6 +640,12 @@ async function playContestArm(browser, mode, outcome, order, extraParams = '') {
     const plusesDisabled = await page.locator('.q-page:not(.hidden) .step-btn.plus:not([disabled])').count();
     const remaining = await page.locator('#alloc-remaining').textContent();
     assert(sumGreedy === 50 && plusesDisabled === 0 && remaining === '0', `${tag}: the + buttons stop at 50 coins in total (allocated ${sumGreedy}, remaining ${remaining}, active + buttons ${plusesDisabled})`);
+    // Typing past the budget is lowered to what is left.
+    await fillAllocations(page, 5);           // 50 allocated
+    const boxes = page.locator('.q-page:not(.hidden) .stepper .step-val');
+    await boxes.nth(0).fill('2');             // 47 allocated, 3 left
+    await boxes.nth(1).fill('10');            // was 5; at most 5 + 3 = 8
+    assert((await boxes.nth(1).inputValue()) === '8' && (await page.locator('#alloc-remaining').textContent()) === '0', `${tag}: typing more than is left is lowered to the maximum still available (got ${await boxes.nth(1).inputValue()})`);
   }
   const comp = Object.assign({}, CORRECT_COMP[fixed50 ? 'fixed50' : 'unlimited'], { qc1: 'The winning side took all of them', qc2: outcome === 'win' ? 'Won' : 'Lost' });
   await completeQuestionnaire(page, { alloc: fixed50 ? 5 : 1, slider: -10, comp });
