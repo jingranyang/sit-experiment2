@@ -345,3 +345,20 @@ body.contest-stage .stage-progress { margin-bottom: 4px; }
 .pager-row button { min-width: 130px; }
 button.secondary { background: var(--color-panel-2); border: 1px solid var(--color-border); color: var(--color-text); }
 .pager-nav .error-text { margin: 0 0 10px; text-align: center; }
+
+/* Allocation steppers (0-10 gold coins per participant). */
+.stepper { display: inline-flex; align-items: center; gap: 8px; }
+.step-btn { width: 34px; height: 34px; padding: 0; border-radius: 8px; font-size: 1.2rem; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
+.step-btn.minus { background: var(--color-panel-2); border: 1px solid var(--color-border); color: var(--color-text); }
+.step-val { min-width: 2.2ch; text-align: center; font-size: 1.15rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+.step-val.unset { color: var(--color-muted); font-weight: 600; }
+.alloc-row.own td:first-child { box-shadow: inset 3px 0 0 var(--color-a); }
+.alloc-row.other td:first-child { box-shadow: inset 3px 0 0 var(--color-b); }
+.alloc-counter {
+  position: sticky; top: 8px; z-index: 2; margin: 12px 0 4px; padding: 10px 14px; border-radius: 10px; text-align: center;
+  background: #2a2109; border: 1px solid #6a5b1c; color: #ffd166; font-size: 1rem;
+}
+.alloc-counter strong { font-size: 1.15rem; }
+.alloc-counter.done { background: rgba(53,196,143,0.15); border-color: var(--color-good); color: var(--color-good); }
+.step-help { font-size: 0.82rem; margin-top: 8px; }
+.alloc-table td { padding-top: 6px; padding-bottom: 6px; }

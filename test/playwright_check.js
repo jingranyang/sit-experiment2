@@ -346,18 +346,31 @@ async function fillEntryAndContinue(page) {
 // helpers answer whatever page is visible and click Next until the debrief.
 const CORRECT_COMP = {
   unlimited: { q5: 'Unlimited', q6: 'The gold coins other participants receive will not be affected' },
-  fixed10: { q5: 'Fixed at 10 coins', q6: 'Cannot exceed 10 coins', q7: 'May require reducing gold coins allocated to others', q8: 'Since the total is limited, trade-offs between participants may be needed' },
+  fixed50: { q5: 'Fixed at 50 coins', q6: 'Must be exactly 50 coins', q7: 'May require reducing gold coins allocated to others', q8: 'Since the total is limited, trade-offs between participants may be needed' },
 };
 
 async function currentQid(page) {
   return page.evaluate(() => { const p = document.querySelector('#q-pages .q-page:not(.hidden)'); return p ? p.dataset.qid : null; });
 }
 
+// Sets every participant's gold coins with the − / + steppers (clicking
+// the real buttons): − until 0, then + `perPersonValue` times. Returns the
+// values the page ends up showing.
 async function fillAllocations(page, perPersonValue) {
-  const labels = await page.evaluate(() => window.__studyDebug.state.roster.map((p) => p.label));
-  for (const label of labels) {
-    await page.locator(`input[name="alloc-${label}"][value="${perPersonValue}"]`).check();
-  }
+  const v = Number(perPersonValue);
+  return page.evaluate((n) => {
+    const out = [];
+    document.querySelectorAll('.q-page:not(.hidden) .stepper').forEach((st) => {
+      const minus = st.querySelector('.minus'), plus = st.querySelector('.plus');
+      for (let i = 0; i < 12 && !minus.disabled; i++) minus.click();
+    });
+    document.querySelectorAll('.q-page:not(.hidden) .stepper').forEach((st) => {
+      const plus = st.querySelector('.plus');
+      for (let i = 0; i < n && !plus.disabled; i++) plus.click();
+      out.push(st.querySelector('.step-val').textContent);
+    });
+    return out;
+  }, v);
 }
 
 async function setSlider(page, id, value) {
@@ -368,7 +381,7 @@ async function setSlider(page, id, value) {
   }, [id, value]);
 }
 
-// opts: { alloc: '0'|'1'|'2', slider: number, comp: {qid: answer} }
+// opts: { alloc: coins per participant (0-10), slider: number, comp: {qid: answer} }
 // Returns the list of page ids visited, in order.
 async function completeQuestionnaire(page, opts) {
   const visited = [];
@@ -416,14 +429,17 @@ async function testFullFlowCondition1(browser) {
   assert(await page.locator('#pg-prev').isDisabled(), 'pager: Previous is disabled on the first page');
   await page.click('#pg-next');
   assert((await page.locator('#pg-error:not(.hidden)').count()) === 1 && (await currentQid(page)) === 'alloc', 'pager: Next is blocked until the allocation page is complete');
+  const maxed = await fillAllocations(page, 12);
+  assert(maxed.every((x) => x === '10'), `steppers (unlimited): each participant tops out at 10 and there is no total cap (got ${maxed})`);
+  assert((await page.locator('#alloc-total-line').count()) === 0, 'steppers (unlimited): no budget counter is shown');
   await fillAllocations(page, '1');
   await page.click('#pg-next');
   assert((await currentQid(page)) === 'identification', 'pager: Next moves to the identification page');
   await page.click('#pg-prev');
   assert((await currentQid(page)) === 'alloc', 'pager: Previous goes back to the allocation page');
-  const kept = await page.locator('input[name^="alloc-"]:checked').count();
-  assert(kept === 10, `pager: allocation answers are kept after going back (got ${kept} checked)`);
-  const visited = await completeQuestionnaire(page, { alloc: '1', slider: 15, comp: CORRECT_COMP.unlimited });
+  const kept = await page.locator('.stepper .step-val:not(.unset)').allTextContents();
+  assert(kept.length === 10 && kept.every((x) => x === '1'), `pager: allocation answers are kept after going back (got ${kept})`);
+  const visited = await completeQuestionnaire(page, { alloc: 1, slider: 15, comp: CORRECT_COMP.unlimited });
   const firstDemo = visited.findIndex((q) => q.startsWith('demo-'));
   const lastComp = visited.map((q) => q.startsWith('comp-')).lastIndexOf(true);
   assert(firstDemo > lastComp && lastComp > 0, `flow order: background questions come after the comprehension checks (pages: ${visited.join(', ')})`);
@@ -573,15 +589,21 @@ async function playContestArm(browser, mode, outcome, order, extraParams = '') {
   assert((await page.locator('.alloc-table thead th').count()) === (mode === 'group' ? 3 : 2), `${tag}: Group column ${mode === 'group' ? 'shown' : 'hidden'}`);
   assert((await page.locator('#identification').count()) === (mode === 'group' ? 1 : 0), `${tag}: group-identification question ${mode === 'group' ? 'shown' : 'omitted'}`);
 
-  const fixed10 = !extraParams.includes('exp3Alloc=unlimited');
-  if (fixed10) {
-    // Over the 10-coin cap is blocked on the allocation page.
-    await fillAllocations(page, '2');
+  const fixed50 = !extraParams.includes('exp3Alloc=unlimited');
+  if (fixed50) {
+    // Budget: exactly 50 gold coins must be allocated, 0-10 each.
+    await fillAllocations(page, 0);
     await page.click('#pg-next');
-    assert((await currentQid(page)) === 'alloc' && (await page.locator('#pg-error:not(.hidden)').count()) === 1, `${tag}: allocating more than 10 gold coins is blocked`);
+    const errText = await page.locator('#pg-error').textContent();
+    assert((await currentQid(page)) === 'alloc' && /exactly 50/.test(errText), `${tag}: Next is blocked until exactly 50 gold coins are allocated (error: "${errText}")`);
+    const greedy = await fillAllocations(page, 10);
+    const sumGreedy = greedy.reduce((a, x) => a + Number(x), 0);
+    const plusesDisabled = await page.locator('.q-page:not(.hidden) .step-btn.plus:not([disabled])').count();
+    const remaining = await page.locator('#alloc-remaining').textContent();
+    assert(sumGreedy === 50 && plusesDisabled === 0 && remaining === '0', `${tag}: the + buttons stop at 50 coins in total (allocated ${sumGreedy}, remaining ${remaining}, active + buttons ${plusesDisabled})`);
   }
-  const comp = Object.assign({}, CORRECT_COMP[fixed10 ? 'fixed10' : 'unlimited'], { qc1: 'The winning side took all of them', qc2: outcome === 'win' ? 'Won' : 'Lost' });
-  await completeQuestionnaire(page, { alloc: fixed10 ? '0' : '1', slider: -10, comp });
+  const comp = Object.assign({}, CORRECT_COMP[fixed50 ? 'fixed50' : 'unlimited'], { qc1: 'The winning side took all of them', qc2: outcome === 'win' ? 'Won' : 'Lost' });
+  await completeQuestionnaire(page, { alloc: fixed50 ? 5 : 1, slider: -10, comp });
   assert(await waitUntil(() => h1Includes(page, 'Debriefing Statement'), 5000), `${tag}: reaches debrief`);
   const debriefText = await page.locator('.card').first().textContent();
   assert(/determined in advance/.test(debriefText || ''), `${tag}: debrief discloses the predetermined outcome and simulated participants`);
@@ -590,7 +612,8 @@ async function playContestArm(browser, mode, outcome, order, extraParams = '') {
   assert(payload.contestMode === mode && payload.contestOutcomeAssigned === outcome && payload.contestOrder === order, `${tag}: payload records contest mode, order and final outcome`);
   assert(payload.contest && payload.contest.outcomeManipulationOk === true, `${tag}: realized outcome matches assigned (realized=${payload.contest && payload.contest.realizedOutcome})`);
   assert(payload.game && payload.game.overallOutcome === outcome, `${tag}: game payload overallOutcome matches`);
-  assert(payload.allocationMode === (fixed10 ? 'fixed10' : 'unlimited'), `${tag}: payload records the allocation mode`);
+  assert(payload.allocationMode === (fixed50 ? 'fixed50' : 'unlimited'), `${tag}: payload records the allocation mode`);
+  assert(payload.allocation.entries.every((e) => e.allocation === (fixed50 ? 5 : 1)) && payload.allocation.total === (fixed50 ? 50 : 10) && payload.allocation.budget === (fixed50 ? 50 : null), `${tag}: payload records numeric allocations and the total (${payload.allocation.total}, budget ${payload.allocation.budget})`);
   assert(payload.comprehension.qc1.correct && payload.comprehension.qc2.correct, `${tag}: contest comprehension checks scored correct`);
   assert(mode === 'group' ? payload.identification === -10 : payload.identification === null, `${tag}: identification recorded (group) / null (individual)`);
   if (mode === 'individual') {
@@ -644,7 +667,7 @@ async function testFullFlowCondition2(browser) {
   const rowCount = await page.locator('.alloc-table tbody tr').count();
   assert(rowCount === 3, `condition 2: allocation table reuses the embedded game's own roster size (got ${rowCount} rows for ingroup=1/outgroup=1 => 3 total)`);
 
-  await completeQuestionnaire(page, { alloc: '0', slider: 5, comp: CORRECT_COMP.unlimited });
+  await completeQuestionnaire(page, { alloc: 0, slider: 5, comp: CORRECT_COMP.unlimited });
 
   const reachedDebrief = await waitUntil(() => h1Includes(page, 'Debriefing Statement'), 5000);
   assert(reachedDebrief, 'condition 2: reaches debrief after measures');

@@ -60,8 +60,8 @@
   const EXP2_ALLOCATION_MODE = 'unlimited';
 
   // Experiment 3 (Condition 3, "Intergroup Conflict Contest"): allocation
-  // framing used AFTER the tug-of-war contest. Defaults to 'fixed10'
-  // (scarce resources: 10 gold coins, allocating more to one participant
+  // framing used AFTER the tug-of-war contest. Defaults to 'fixed50'
+  // (scarce resources: 50 gold coins, allocating more to one participant
   // leaves less for others) — after intergroup competition, does a real
   // trade-off bring out discrimination and negative affect? Override per
   // link with ?exp3Alloc=unlimited.
@@ -105,7 +105,7 @@
     contestMode: ['group', 'individual'].includes(qs.get('contestMode')) ? qs.get('contestMode') : null,
     contestOutcome: ['win', 'lose'].includes(qs.get('outcome')) ? qs.get('outcome') : null,
     contestOrder: ['WL', 'LW'].includes((qs.get('order') || '').toUpperCase()) ? qs.get('order').toUpperCase() : null,
-    exp3AllocMode: qs.get('exp3Alloc') === 'unlimited' ? 'unlimited' : 'fixed10',
+    exp3AllocMode: qs.get('exp3Alloc') === 'unlimited' ? 'unlimited' : 'fixed50',
     debug: qs.get('debug') === '1',
     // ?allowMobile=1 skips the computer-only check (for previewing on a phone).
     allowMobile: qs.get('allowMobile') === '1',
@@ -387,7 +387,7 @@
     const unlimited = S.allocMode === 'unlimited';
     const resourceParagraph = unlimited
       ? 'During this task, you and members of your group are participating in a community decision-making process. You have discovered an unlimited supply of gold coins that can be used to support individuals and improve people’s well-being. Please pay attention, other participants are not informed about the total number of gold coins available. Since the number of gold coins is unlimited, how many gold coins you allocate to one participant does not affect how many gold coins other participants receive.'
-      : 'During this task, you and members of your group are participating in a community decision-making process. You have discovered 10 gold coins that can be used to support individuals and improve people’s well-being. Because the total number of gold coins is fixed, allocating more gold coins to one participant reduces the number of gold coins available to other participants. Please pay attention, other participants are not informed about the total number of gold coins available.';
+      : 'During this task, you and members of your group are participating in a community decision-making process. You have discovered 50 gold coins that can be used to support individuals and improve people’s well-being. Because the total number of gold coins is fixed, allocating more gold coins to one participant reduces the number of gold coins available to other participants. Please pay attention, other participants are not informed about the total number of gold coins available.';
 
     app.innerHTML = `
       ${progressBarHtml()}
@@ -674,7 +674,7 @@
       label: p.label, groupLabel: p.groupLabel, isSelf: !!p.isReal, isOpponent: !!p.isOpponent,
       allocation: Object.prototype.hasOwnProperty.call(S.measures.allocations, p.label) ? S.measures.allocations[p.label] : null,
     }));
-    const allocTotal = allocEntries.reduce((sum, e) => sum + (e.allocation === '0' || e.allocation === '1' || e.allocation === '2' ? Number(e.allocation) : 0), 0);
+    const allocTotal = allocEntries.reduce((sum, e) => sum + (typeof e.allocation === 'number' ? e.allocation : 0), 0);
     return {
       pid: S.pid,
       condition: S.condition,
@@ -698,7 +698,7 @@
       contestOrder: S.contestOrder,
       contest: S.contestPayload ? S.contestPayload.contest : null,
       allocationMode: S.allocMode,
-      allocation: { entries: allocEntries, total: allocTotal },
+      allocation: { entries: allocEntries, total: allocTotal, budget: S.allocMode === 'fixed50' ? window.OutcomeMeasures.budgetFor(S.roster || []) : null, maxPerPerson: window.OutcomeMeasures.MAX_EACH, clicks: S.measures.allocationClicks || 0 },
       // In the Experiment 3 individual arm there is no group: identification
       // is null, ingroupAffect = feelings toward the other (non-opponent)
       // participants, outgroupAffect = feelings toward the contest opponent.

@@ -4,7 +4,7 @@
 // (Question 3), an out-group affect slider (Question 4), and a set of
 // comprehension-check questions whose exact wording depends on whether the
 // participant was in an "unlimited resources" condition (Experiment 1 /
-// Group Label) or a "fixed 10 coins" condition (Experiment 3 / Conflict
+// Group Label) or a "fixed 50 coins" condition (Experiment 3 / Conflict
 // Moderator). Wording below is taken verbatim from the KU POLS Annual
 // Survey Proposal (Jingran Yang, July 2026), sections 5.1/5.2 (Questions
 // 1-4) and the per-condition comprehension-check blocks.
@@ -15,7 +15,14 @@ window.OutcomeMeasures = (function () {
     return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
-  // mode: 'unlimited' (Experiment 1 / Experiment 2) or 'fixed10' (Experiment 3)
+  // mode: 'unlimited' (Experiment 1 / Experiment 2) or 'fixed50' (Experiment 3)
+  //
+  // Allocation scale: 0-10 gold coins per participant. In 'fixed50' the
+  // budget is half of the maximum possible total (5 x roster size = 50 for
+  // the default 10-person roster) and must be allocated exactly, so every
+  // extra coin for one participant is a coin taken from another.
+  const MAX_EACH = 10;
+  function budgetFor(roster) { return 5 * roster.length; }
   const UNLIMITED_COMPREHENSION = [
     {
       id: 'q5',
@@ -35,18 +42,18 @@ window.OutcomeMeasures = (function () {
     },
   ];
 
-  const FIXED10_COMPREHENSION = [
+  const FIXED50_COMPREHENSION = (B) => [
     {
       id: 'q5',
       prompt: 'In the current task, what is the total number of gold coins?',
-      options: ['Fixed at 10 coins', 'Unlimited', 'Uncertain'],
-      correct: 'Fixed at 10 coins',
+      options: [`Fixed at ${B} coins`, 'Unlimited', 'Uncertain'],
+      correct: `Fixed at ${B} coins`,
     },
     {
       id: 'q6',
       prompt: 'In the current task, the total gold coins you allocate to all participants:',
-      options: ['Can exceed 10 coins', 'Cannot exceed 10 coins', 'No limit'],
-      correct: 'Cannot exceed 10 coins',
+      options: [`Can be more or less than ${B} coins`, `Must be exactly ${B} coins`, 'Has no limit'],
+      correct: `Must be exactly ${B} coins`,
     },
     {
       id: 'q7',
@@ -92,7 +99,7 @@ window.OutcomeMeasures = (function () {
   }
 
   function comprehensionFor(mode, ctx) {
-    const base = mode === 'fixed10' ? FIXED10_COMPREHENSION : UNLIMITED_COMPREHENSION;
+    const base = mode === 'fixed50' ? FIXED50_COMPREHENSION(budgetFor((ctx && ctx.roster) || new Array(10))) : UNLIMITED_COMPREHENSION;
     return ctx && ctx.contest ? base.concat(contestComprehension(ctx.contest)) : base;
   }
 
@@ -118,11 +125,11 @@ window.OutcomeMeasures = (function () {
   // show it here, right before the allocation, once the games are over.
   // The group assignment is the one made at the start of the study and used
   // throughout the games — nothing is re-randomized here.
-  function scenarioText(mode, individual, afterContest) {
+  function scenarioText(mode, individual, afterContest, B) {
     const who = individual ? 'you and the other participants in this study are' : 'you and members of your group are';
     const sep = afterContest ? ' These gold coins are separate from the points in the contest you just played.' : '';
-    return mode === 'fixed10'
-      ? `During this task, ${who} participating in a community decision-making process. You have discovered 10 gold coins that can be used to support individuals and improve people’s well-being. Because the total number of gold coins is fixed, allocating more gold coins to one participant reduces the number of gold coins available to other participants. Please pay attention, other participants are not informed about the total number of gold coins available.${sep}`
+    return mode === 'fixed50'
+      ? `During this task, ${who} participating in a community decision-making process. You have discovered ${B} gold coins that can be used to support individuals and improve people’s well-being. Because the total number of gold coins is fixed, allocating more gold coins to one participant reduces the number of gold coins available to other participants. Please pay attention, other participants are not informed about the total number of gold coins available.${sep}`
       : `During this task, ${who} participating in a community decision-making process. You have discovered an unlimited supply of gold coins that can be used to support individuals and improve people’s well-being. Please pay attention, other participants are not informed about the total number of gold coins available. Since the number of gold coins is unlimited, how many gold coins you allocate to one participant does not affect how many gold coins other participants receive.${sep}`;
   }
 
@@ -135,19 +142,26 @@ window.OutcomeMeasures = (function () {
     const otherCount = roster.filter((p) => p.groupLabel === otherGroup).length;
     const rows = orderedRoster(roster);
 
-    const allocIntro = mode === 'fixed10'
-      ? 'Now, you will distribute the 10 gold coins. Please note that the total number of gold coins available is fixed — when you allocate more gold coins to some participants, fewer gold coins will be available for other participants. Please follow these rules: for each participant, you can choose one of the following: 0 gold coins, 1 gold coin, 2 gold coins, or Cannot decide. You need to make allocation decisions for each participant separately, and the total number of gold coins allocated cannot exceed 10. Please complete the allocation according to your true preferences.'
-      : 'Now, you need to allocate gold coins to all participants, including yourself. Please follow these rules: for each participant, you can allocate between 0 and 2 gold coins (inclusive). You need to make allocation decisions for each participant separately. Please allocate according to your true preferences — there is no right or wrong answer.';
+    const allocIntro = mode === 'fixed50'
+      ? `Now, you will distribute the ${budgetFor(roster)} gold coins among all participants, including yourself. Please note that the total number of gold coins available is fixed — when you allocate more gold coins to some participants, fewer gold coins will be available for other participants. Please follow these rules: for each participant, you can allocate between 0 and ${MAX_EACH} gold coins (inclusive). You need to make allocation decisions for each participant separately, and you must allocate all ${budgetFor(roster)} gold coins — no more and no less. Please complete the allocation according to your true preferences.`
+      : 'Now, you need to allocate gold coins to all participants, including yourself. Please follow these rules: for each participant, you can allocate between 0 and 10 gold coins (inclusive). You need to make allocation decisions for each participant separately. Please allocate according to your true preferences — there is no right or wrong answer.';
 
-    const optLabels = { '0': '0 gold coins', '1': '1 gold coin', '2': '2 gold coins', cannot: 'Cannot decide' };
+    // Each participant gets a − / number / + stepper (0-10). Every row
+    // starts unset ("–"): pressing − sets it to 0, + to 1, so each row is
+    // an explicit decision and no default value anchors the answer.
     const rowsHtml = rows.map((p) => {
       const name = `Participant ${esc(p.label)}${p.isReal ? ' (you)' : p.isOpponent ? ' (your opponent in the contest)' : ''}`;
       const groupText = `Group ${esc(p.groupLabel)}${p.groupLabel === group ? ' (your group)' : ''}`;
-      return `<tr>
+      const cls = individual ? '' : (p.groupLabel === group ? 'own' : 'other');
+      return `<tr class="alloc-row ${cls}">
         <td>${name}</td>
         ${individual ? '' : `<td>${groupText}</td>`}
-        <td class="alloc-options">
-          ${['0', '1', '2', 'cannot'].map((o) => `<label class="alloc-opt"><input type="radio" name="alloc-${p.label}" value="${o}" data-alloc-label="${p.label}" /> ${optLabels[o]}</label>`).join('')}
+        <td>
+          <div class="stepper" data-alloc-label="${p.label}">
+            <button type="button" class="step-btn minus" data-step="-1" aria-label="One fewer gold coin for Participant ${esc(p.label)}">−</button>
+            <span class="step-val unset" id="alloc-val-${p.label}">–</span>
+            <button type="button" class="step-btn plus" data-step="1" aria-label="One more gold coin for Participant ${esc(p.label)}">+</button>
+          </div>
         </td>
       </tr>`;
     }).join('');
@@ -177,20 +191,21 @@ window.OutcomeMeasures = (function () {
 
     const allocPage = page('alloc', `
         <h2>Allocation Task</h2>
-        ${ctx.showScenario ? `<div class="notice scenario mt" style="margin-bottom:14px;">${esc(scenarioText(mode, individual, !!ctx.contest))}</div>` : ''}
+        ${ctx.showScenario ? `<div class="notice scenario mt" style="margin-bottom:14px;">${esc(scenarioText(mode, individual, !!ctx.contest, budgetFor(roster)))}</div>` : ''}
         ${individual
           ? `<p>Your ID: Participant ${esc(self.label)}</p>
         <p class="muted">There are ${roster.length} participants in this task (including yourself). Participant ${esc(ctx.individual.opponentLabel)} was your opponent in the contest.</p>`
           : `<p>Your ID: Participant ${esc(self.label)} &nbsp;·&nbsp; Your assigned group: Group ${esc(group)}</p>
         <p class="muted">There are ${roster.length} participants in this task (including yourself). Your group (Group ${esc(group)}) consists of ${ownCount} member(s) (including yourself), and the other ${otherCount} participant(s) belong to Group ${esc(otherGroup)}.</p>`}
         <p>${esc(allocIntro)}</p>
+        ${mode === 'fixed50' ? `<div class="alloc-counter" id="alloc-total-line">Allocated: <strong id="alloc-total">0</strong> / ${budgetFor(roster)} &nbsp;·&nbsp; Remaining: <strong id="alloc-remaining">${budgetFor(roster)}</strong></div>` : ''}
         <div style="overflow-x:auto;">
         <table class="alloc-table">
-          <thead><tr><th>Participant</th>${individual ? '' : '<th>Group</th>'}<th>Allocation</th></tr></thead>
+          <thead><tr><th>Participant</th>${individual ? '' : '<th>Group</th>'}<th>Gold coins (0–10)</th></tr></thead>
           <tbody>${rowsHtml}</tbody>
         </table>
         </div>
-        ${mode === 'fixed10' ? `<p class="mt" id="alloc-total-line">Total allocated so far: <strong id="alloc-total">0</strong> / 10</p>` : ''}`);
+        <p class="muted step-help">Use − and + to set each participant's gold coins. Press − once to give 0.</p>`);
 
     const sliderPages = individual
       ? page('ingroupAffect', `<h2>Feelings Toward Other Participants</h2>${sliderBlock('ingroupAffect', 'How do you feel toward the other participants in this study (other than your contest opponent)?', 'Please rate based on your true feelings.', 'Very unfavorable', 'Very favorable')}`)
@@ -205,24 +220,53 @@ window.OutcomeMeasures = (function () {
   function attachListeners(mode, ctx, state) {
     const { roster } = ctx;
     const totalEl = document.getElementById('alloc-total');
+    const remainingEl = document.getElementById('alloc-remaining');
+    const fixed = mode === 'fixed50';
+    const BUDGET = budgetFor(roster);
 
     function recomputeTotal() {
       let sum = 0;
       roster.forEach((p) => {
         const v = state.allocations[p.label];
-        if (v === '0' || v === '1' || v === '2') sum += Number(v);
+        if (typeof v === 'number') sum += v;
       });
       if (totalEl) totalEl.textContent = String(sum);
+      if (remainingEl) remainingEl.textContent = String(BUDGET - sum);
+      const counter = document.getElementById('alloc-total-line');
+      if (counter) counter.classList.toggle('done', sum === BUDGET);
       return sum;
     }
-
-    document.querySelectorAll('.alloc-options input[type="radio"]').forEach((input) => {
-      input.addEventListener('change', () => {
-        state.allocations[input.dataset.allocLabel] = input.value;
-        recomputeTotal();
+    // Enable/disable buttons so an invalid value can't be entered:
+    // never below 0, never above 10, and (fixed budget) never past 50.
+    function refreshSteppers() {
+      const sum = recomputeTotal();
+      document.querySelectorAll('.stepper').forEach((st) => {
+        const v = state.allocations[st.dataset.allocLabel];
+        const set = typeof v === 'number';
+        const valEl = st.querySelector('.step-val');
+        valEl.textContent = set ? String(v) : '–';
+        valEl.classList.toggle('unset', !set);
+        st.querySelector('.minus').disabled = set && v <= 0;
+        st.querySelector('.plus').disabled = (set && v >= MAX_EACH) || (fixed && sum >= BUDGET);
+      });
+    }
+    document.querySelectorAll('.stepper').forEach((st) => {
+      const label = st.dataset.allocLabel;
+      st.querySelectorAll('.step-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const cur = state.allocations[label];
+          const step = Number(btn.dataset.step);
+          let next;
+          if (typeof cur !== 'number') next = step > 0 ? 1 : 0;
+          else next = Math.max(0, Math.min(MAX_EACH, cur + step));
+          if (fixed && step > 0 && recomputeTotal() >= BUDGET) return;
+          state.allocations[label] = next;
+          state.allocationClicks = (state.allocationClicks || 0) + 1;
+          refreshSteppers();
+        });
       });
     });
-    recomputeTotal();
+    refreshSteppers();
 
     ['identification', 'ingroupAffect', 'outgroupAffect'].forEach((id) => {
       const slider = document.getElementById(id);
@@ -249,9 +293,12 @@ window.OutcomeMeasures = (function () {
     // if the page is complete.
     return function validate(qid) {
       if (qid === 'alloc') {
-        const allAllocated = roster.every((p) => state.allocations[p.label] !== undefined);
-        if (!allAllocated) return 'Please choose an allocation for every participant.';
-        if (mode === 'fixed10' && recomputeTotal() > 10) return 'The total number of gold coins allocated cannot exceed 10.';
+        const allAllocated = roster.every((p) => typeof state.allocations[p.label] === 'number');
+        if (!allAllocated) return 'Please set the gold coins for every participant (press − once to give 0).';
+        if (fixed) {
+          const sum = recomputeTotal();
+          if (sum !== BUDGET) return `You must allocate exactly ${BUDGET} gold coins. You have ${BUDGET - sum} left to allocate.`;
+        }
         return null;
       }
       if (qid === 'identification' || qid === 'ingroupAffect' || qid === 'outgroupAffect') {
@@ -273,5 +320,5 @@ window.OutcomeMeasures = (function () {
     return out;
   }
 
-  return { renderHtml, attachListeners, comprehensionFor, correctness, orderedRoster };
+  return { renderHtml, attachListeners, comprehensionFor, correctness, orderedRoster, budgetFor, MAX_EACH };
 })();
