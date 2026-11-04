@@ -131,7 +131,7 @@
     // in seconds (default: per-round reading times, see LOBBY_READ_SEC).
     // Mainly for shortening the wait in automated tests.
     lobbyMaxSec: qs.get('lobbyMax') ? clampInt(qs.get('lobbyMax'), 30, 1, 120) : 0,
-    lobbyCountdownSec: clampInt(qs.get('lobbyCountdown'), 3, 0, 10),
+    lobbyCountdownSec: clampInt(qs.get('lobbyCountdown'), 5, 0, 10),
     oppLabel: clampInt(qs.get('oppLabel'), 0, 0, 999),
   };
   // Experiment 3 individual arm: one-on-one, no teammates, no help, no chat.
@@ -1072,11 +1072,29 @@
       started = true;
       rec.allReadyAfterMs = Date.now() - opened;
       const st = document.getElementById('lobby-status');
+      if (st) st.innerHTML = '<strong>All players are ready!</strong>';
+      // Full-screen countdown: each number pops up large in the middle of
+      // the screen (5, 4, 3, 2, 1), then "Start!", then the round begins.
+      const overlay = document.createElement('div');
+      overlay.className = 'countdown-overlay';
+      overlay.innerHTML = `<div class="cd-label">Round ${n}: ${esc(ROUND_NAMES[k])}</div><div class="cd-num" id="cd-num"></div><div class="cd-sub">All players are ready</div>`;
+      document.body.appendChild(overlay);
+      const numEl = overlay.querySelector('#cd-num');
+      const show = (text, cls) => {
+        numEl.textContent = text;
+        numEl.className = 'cd-num ' + (cls || '');
+        void numEl.offsetWidth;
+        numEl.classList.add('pop');
+      };
       let c = CONFIG.lobbyCountdownSec;
       const tick = () => {
-        if (S.phase !== 'lobby_' + k) return;
-        if (c <= 0) { ROUND_START[k](); return; }
-        if (st) st.innerHTML = `<strong>All players are ready!</strong> Starting in ${c}…`;
+        if (S.phase !== 'lobby_' + k) { overlay.remove(); return; }
+        if (c <= 0) {
+          show('Start!', 'go');
+          timers.push(setTimeout(() => { overlay.remove(); if (S.phase === 'lobby_' + k) ROUND_START[k](); }, 800));
+          return;
+        }
+        show(String(c));
         c--;
         timers.push(setTimeout(tick, 1000));
       };
