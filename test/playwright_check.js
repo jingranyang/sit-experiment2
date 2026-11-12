@@ -628,7 +628,7 @@ async function playContestArm(browser, mode, outcome, order, extraParams = '') {
   assert((await page.locator('.alloc-table thead th').count()) === (mode === 'group' ? 3 : 2), `${tag}: Group column ${mode === 'group' ? 'shown' : 'hidden'}`);
   assert((await page.locator('#identification').count()) === (mode === 'group' ? 1 : 0), `${tag}: group-identification question ${mode === 'group' ? 'shown' : 'omitted'}`);
 
-  const fixed50 = !extraParams.includes('exp3Alloc=unlimited');
+  const fixed50 = extraParams.includes('exp3Alloc=fixed50');
   if (fixed50) {
     // Budget: exactly 50 gold coins must be allocated, 0-10 each.
     await fillAllocations(page, 0);
@@ -720,7 +720,7 @@ async function testFullFlowCondition3(browser) {
     playContestArm(browser, 'group', 'win', 'WL'),
     playContestArm(browser, 'group', 'lose', 'LW'),
     playContestArm(browser, 'individual', 'win', 'LW'),
-    playContestArm(browser, 'individual', 'lose', 'WL', '&exp3Alloc=unlimited'),
+    playContestArm(browser, 'individual', 'lose', 'WL', '&exp3Alloc=fixed50'),
   ]);
 }
 
