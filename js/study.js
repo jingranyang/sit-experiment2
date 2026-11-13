@@ -492,14 +492,17 @@
     const payload = event.data.payload;
     if (S.stage === 'task_contest') {
       // Group arm: allocate over the exact roster just played with. The
-      // individual arm keeps its own 10-person ungrouped roster (built at
-      // assignment) whose self/opponent labels were passed into the game.
+      // individual arm allocates only between the participant and their
+      // one-on-one contest opponent (labels were passed into the game), so
+      // the comparison is self vs. opponent, with no other participants.
       S.contestPayload = payload;
       document.body.classList.remove('contest-stage');
       if (S.contestMode === 'group' && Array.isArray(payload.roster) && payload.roster.length) {
         S.roster = payload.roster;
         const self = S.roster.find((p) => p.isReal);
         S.label = self ? self.label : S.label;
+      } else if (S.contestMode === 'individual' && Array.isArray(S.roster)) {
+        S.roster = S.roster.filter((p) => p.isReal || p.isOpponent);
       }
       S.timestamps.measuresStartAt = nowIso();
       S.stage = 'measures';

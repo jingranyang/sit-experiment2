@@ -54,6 +54,14 @@ window.LinkMatch = (function () {
   // rows/cols) which is always passable, matching the classic Lianliankan
   // rule that a path may route around the outside edge of the board.
   function canConnect(board, r1, c1, r2, c2) {
+    return findPath(board, r1, c1, r2, c2) !== null;
+  }
+
+  // Same search as canConnect, but returns the connecting path as a list of
+  // corner points [{r, c}, ...] (start, each turn, end), or null if the two
+  // tiles can't be connected. Points may lie on the border ring (row/col -1
+  // or rows/cols). Used to draw the connecting line when a pair is cleared.
+  function findPath(board, r1, c1, r2, c2) {
     const { cols, rows, cells } = board;
     const passable = (r, c) => {
       if (r < -1 || r > rows || c < -1 || c > cols) return false;
@@ -63,11 +71,11 @@ window.LinkMatch = (function () {
     };
     const DIRS = [[-1, 0], [1, 0], [0, -1], [0, 1]];
     const visited = new Set(['s']);
-    const queue = [{ r: r1, c: c1, dir: -1, turns: 0 }];
+    const queue = [{ r: r1, c: c1, dir: -1, turns: 0, parent: null }];
     let head = 0;
     while (head < queue.length) {
       const cur = queue[head++];
-      if (cur.r === r2 && cur.c === c2) return true;
+      if (cur.r === r2 && cur.c === c2) return cornerPoints(cur);
       for (let d = 0; d < 4; d++) {
         const nr = cur.r + DIRS[d][0], nc = cur.c + DIRS[d][1];
         if (!passable(nr, nc)) continue;
@@ -76,10 +84,25 @@ window.LinkMatch = (function () {
         const key = nr + ',' + nc + ',' + d + ',' + turns;
         if (visited.has(key)) continue;
         visited.add(key);
-        queue.push({ r: nr, c: nc, dir: d, turns });
+        queue.push({ r: nr, c: nc, dir: d, turns, parent: cur });
       }
     }
-    return false;
+    return null;
+  }
+
+  // Walks the BFS parent chain back to the start and keeps only the points
+  // where the direction changes, giving at most four points (two turns).
+  function cornerPoints(node) {
+    const cellsOnPath = [];
+    for (let n = node; n; n = n.parent) cellsOnPath.push({ r: n.r, c: n.c, dir: n.dir });
+    cellsOnPath.reverse();
+    const points = [{ r: cellsOnPath[0].r, c: cellsOnPath[0].c }];
+    for (let i = 1; i < cellsOnPath.length - 1; i++) {
+      if (cellsOnPath[i + 1].dir !== cellsOnPath[i].dir) points.push({ r: cellsOnPath[i].r, c: cellsOnPath[i].c });
+    }
+    const last = cellsOnPath[cellsOnPath.length - 1];
+    points.push({ r: last.r, c: last.c });
+    return points;
   }
 
   function idxToRC(idx, cols) { return { r: Math.floor(idx / cols), c: idx % cols }; }
@@ -127,5 +150,5 @@ window.LinkMatch = (function () {
     return board; // best effort — astronomically unlikely to fall through
   }
 
-  return { SYMBOLS, DIFFICULTY, generateBoard, canConnect, findValidPair, hasAnyValidMove, reshuffleUntilSolvable };
+  return { SYMBOLS, DIFFICULTY, generateBoard, canConnect, findPath, findValidPair, hasAnyValidMove, reshuffleUntilSolvable };
 })();

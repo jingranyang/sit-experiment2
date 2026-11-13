@@ -104,11 +104,30 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .notice.error { border-color: #6a1c2a; background: #2a0912; color: #f08a9d; }
 
 .link-grid {
+  position: relative;
   display: grid;
   gap: 6px;
   max-width: 420px;
   margin: 14px auto 0;
 }
+/* Connecting line drawn briefly when a pair is cleared (game.js drawLinkPath). */
+.link-path {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+  pointer-events: none;
+  transition: opacity 0.35s ease;
+}
+.link-path polyline {
+  fill: none;
+  stroke: #ffd166;
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 4px rgba(255, 209, 102, 0.8));
+}
+.link-path.fade { opacity: 0; }
 .link-tile {
   aspect-ratio: 1 / 1;
   display: flex;

@@ -212,7 +212,7 @@ window.OutcomeMeasures = (function () {
         ${ctx.showScenario ? `<div class="notice scenario mt" style="margin-bottom:14px;">${esc(scenarioText(mode, individual, !!ctx.contest, budgetFor(roster)))}</div>` : ''}
         ${individual
           ? `<p>Your ID: Participant ${esc(self.label)}</p>
-        <p class="muted">There are ${roster.length} participants in this task (including yourself). Participant ${esc(ctx.individual.opponentLabel)} was your opponent in the contest.</p>`
+        <p class="muted">In this task you allocate gold coins to two participants: yourself and Participant ${esc(ctx.individual.opponentLabel)}, your opponent in the contest.</p>`
           : `<p>Your ID: Participant ${esc(self.label)} &nbsp;·&nbsp; Your assigned group: Group ${esc(group)}</p>
         <p class="muted">There are ${roster.length} participants in this task (including yourself). Your group (Group ${esc(group)}) consists of ${ownCount} member(s) (including yourself), and the other ${otherCount} participant(s) belong to Group ${esc(otherGroup)}.</p>`}
         <p>${esc(allocIntro)}</p>

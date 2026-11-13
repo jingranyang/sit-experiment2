@@ -176,6 +176,19 @@ async function testStandalonePlay(browser) {
 
   // Clear two full boards (using the debug hook to always click a genuinely
   // connectable pair) to verify linkBoardsCompleted actually increments.
+  // A matched pair draws the connecting line (svg.link-path) on the grid.
+  {
+    const pair = await page.evaluate(() => window.LinkMatch.findValidPair(window.__sitDebug.state.link.board));
+    await page.locator(`[data-idx="${pair[0]}"]`).click();
+    await page.locator(`[data-idx="${pair[1]}"]`).click();
+    const line = await page.evaluate(() => {
+      const pl = document.querySelector('.link-grid svg.link-path polyline');
+      return pl ? pl.getAttribute('points').trim().split(/\s+/).length : 0;
+    });
+    assert(line >= 2 && line <= 4, `link: matching a pair draws a connecting line with 2-4 points (got ${line})`);
+    await sleep(800);
+    assert((await page.locator('svg.link-path').count()) === 0, 'link: the connecting line fades out and is removed');
+  }
   const clearedTwoBoards = await clearLinkBoards(page, 2, 15000);
   assert(clearedTwoBoards, 'clearing every tile pair in consecutive boards increments linkBoardsCompleted to at least 2');
 
@@ -624,7 +637,8 @@ async function playContestArm(browser, mode, outcome, order, extraParams = '') {
   await f.click('#contest-continue-btn');
 
   await waitUntil(async () => (await currentQid(page)) === 'alloc', 5000);
-  assert((await page.locator('.alloc-table tbody tr').count()) === 10, `${tag}: allocation table lists all 10 participants`);
+  const allocRows = await page.locator('.alloc-table tbody tr').count();
+  assert(allocRows === (mode === 'group' ? 10 : 2), `${tag}: allocation table lists ${mode === 'group' ? 'all 10 participants' : 'only self + opponent'} (got ${allocRows})`);
   assert((await page.locator('.alloc-table thead th').count()) === (mode === 'group' ? 3 : 2), `${tag}: Group column ${mode === 'group' ? 'shown' : 'hidden'}`);
   assert((await page.locator('#identification').count()) === (mode === 'group' ? 1 : 0), `${tag}: group-identification question ${mode === 'group' ? 'shown' : 'omitted'}`);
 
@@ -658,7 +672,7 @@ async function playContestArm(browser, mode, outcome, order, extraParams = '') {
   assert(payload.contest && payload.contest.outcomeManipulationOk === true, `${tag}: realized outcome matches assigned (realized=${payload.contest && payload.contest.realizedOutcome})`);
   assert(payload.game && payload.game.overallOutcome === outcome, `${tag}: game payload overallOutcome matches`);
   assert(payload.allocationMode === (fixed50 ? 'fixed50' : 'unlimited'), `${tag}: payload records the allocation mode`);
-  assert(payload.allocation.entries.every((e) => e.allocation === (fixed50 ? 5 : 1)) && payload.allocation.total === (fixed50 ? 50 : 10) && payload.allocation.budget === (fixed50 ? 50 : null), `${tag}: payload records numeric allocations and the total (${payload.allocation.total}, budget ${payload.allocation.budget})`);
+  assert(payload.allocation.entries.every((e) => e.allocation === (fixed50 ? 5 : 1)) && payload.allocation.total === (fixed50 ? 50 : allocRows) && payload.allocation.budget === (fixed50 ? 50 : null), `${tag}: payload records numeric allocations and the total (${payload.allocation.total}, budget ${payload.allocation.budget})`);
   assert(payload.comprehension.qc1.correct && payload.comprehension.qc2.correct, `${tag}: contest comprehension checks scored correct`);
   assert(mode === 'group' ? payload.identification === -10 : payload.identification === null, `${tag}: identification recorded (group) / null (individual)`);
   if (mode === 'individual') {
@@ -718,9 +732,9 @@ async function testFullFlowCondition3(browser) {
   await Promise.all([
     testContestRealism(browser),
     playContestArm(browser, 'group', 'win', 'WL'),
-    playContestArm(browser, 'group', 'lose', 'LW'),
+    playContestArm(browser, 'group', 'lose', 'LW', '&exp3Alloc=fixed50'),
     playContestArm(browser, 'individual', 'win', 'LW'),
-    playContestArm(browser, 'individual', 'lose', 'WL', '&exp3Alloc=fixed50'),
+    playContestArm(browser, 'individual', 'lose', 'WL'),
   ]);
 }
 

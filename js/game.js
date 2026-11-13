@@ -1694,8 +1694,9 @@
     const a = { r: Math.floor(l.selected / l.board.cols), c: l.selected % l.board.cols };
     const b = { r: Math.floor(idx / l.board.cols), c: idx % l.board.cols };
     const sameSymbol = l.board.cells[l.selected] === l.board.cells[idx];
-    const connects = sameSymbol && LinkMatch.canConnect(l.board, a.r, a.c, b.r, b.c);
-    if (connects) {
+    const path = sameSymbol ? LinkMatch.findPath(l.board, a.r, a.c, b.r, b.c) : null;
+    if (path) {
+      const lineCols = l.board.cols, lineRows = l.board.rows;
       const clearedA = l.selected, clearedB = idx;
       l.board.cells[l.selected] = null;
       l.board.cells[idx] = null;
@@ -1719,6 +1720,8 @@
           refreshHelpPanel('link');
         }
         updateLinkScoreboardDomImmediate();
+        renderLinkBoardDom();
+        drawLinkPath(path, lineCols, lineRows);
         setTimeout(nextLinkRound, 450);
         return;
       }
@@ -1729,6 +1732,7 @@
         updateLinkHintDom();
       }
       renderLinkBoardDom();
+      drawLinkPath(path, lineCols, lineRows);
       updateLinkProgressDom();
     } else {
       // Not a valid match — just move the selection to the newly clicked tile.
@@ -1782,6 +1786,42 @@
     slot.querySelectorAll('.link-tile:not(.empty)').forEach((el) => {
       el.addEventListener('click', () => handleLinkTileClick(Number(el.dataset.idx)));
     });
+  }
+
+  // Draws the connecting line of a just-cleared pair over the board, then
+  // fades it out. `points` are grid corners from LinkMatch.findPath; points
+  // on the border ring (row/col -1 or rows/cols) sit half a cell outside
+  // the grid. Purely visual: the pair is already cleared, so play goes on.
+  function drawLinkPath(points, cols, rows) {
+    const slot = document.getElementById('link-grid-slot');
+    const grid = slot && slot.querySelector('.link-grid');
+    if (!grid || !points || points.length < 2) return;
+    const tiles = grid.querySelectorAll('.link-tile');
+    const first = tiles[0], last = tiles[tiles.length - 1];
+    if (!first || !last) return;
+    const box = grid.getBoundingClientRect();
+    const f = first.getBoundingClientRect(), z = last.getBoundingClientRect();
+    const stepX = cols > 1 ? (z.left - f.left) / (cols - 1) : f.width;
+    const stepY = rows > 1 ? (z.top - f.top) / (rows - 1) : f.height;
+    const x0 = f.left - box.left + f.width / 2, y0 = f.top - box.top + f.height / 2;
+    const xy = (p) => {
+      // Border-ring points are pulled in to half a step outside the grid.
+      const c = p.c < 0 ? -0.5 : p.c >= cols ? cols - 0.5 : p.c;
+      const r = p.r < 0 ? -0.5 : p.r >= rows ? rows - 0.5 : p.r;
+      return `${(x0 + c * stepX).toFixed(1)},${(y0 + r * stepY).toFixed(1)}`;
+    };
+    const svgNs = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNs, 'svg');
+    svg.setAttribute('class', 'link-path');
+    svg.setAttribute('width', String(box.width));
+    svg.setAttribute('height', String(box.height));
+    svg.setAttribute('aria-hidden', 'true');
+    const line = document.createElementNS(svgNs, 'polyline');
+    line.setAttribute('points', points.map(xy).join(' '));
+    svg.appendChild(line);
+    grid.appendChild(svg);
+    setTimeout(() => svg.classList.add('fade'), 250);
+    setTimeout(() => svg.remove(), 600);
   }
 
   function updateLinkTimerDom() {
